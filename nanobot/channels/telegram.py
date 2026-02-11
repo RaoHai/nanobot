@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import re
+from typing import TYPE_CHECKING
+
 from loguru import logger
 from telegram import BotCommand, Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
@@ -13,6 +15,9 @@ from nanobot.bus.events import OutboundMessage
 from nanobot.bus.queue import MessageBus
 from nanobot.channels.base import BaseChannel
 from nanobot.config.schema import TelegramConfig
+
+if TYPE_CHECKING:
+    from nanobot.session.manager import SessionManager
 
 
 def _markdown_to_telegram_html(text: str) -> str:
@@ -99,10 +104,12 @@ class TelegramChannel(BaseChannel):
         config: TelegramConfig,
         bus: MessageBus,
         groq_api_key: str = "",
+        session_manager: "SessionManager | None" = None,
     ):
         super().__init__(config, bus)
         self.config: TelegramConfig = config
         self.groq_api_key = groq_api_key
+        self.session_manager = session_manager
         self._app: Application | None = None
         self._chat_ids: dict[str, int] = {}  # Map sender_id to chat_id for replies
         self._typing_tasks: dict[str, asyncio.Task] = {}  # chat_id -> typing loop task
@@ -183,10 +190,16 @@ class TelegramChannel(BaseChannel):
         if not self._app:
             logger.warning("Telegram bot not running")
             return
-        
+
         # Stop typing indicator for this chat
         self._stop_typing(msg.chat_id)
-        
+
+        # If silent, just stop typing and don't send anything
+        logger.debug(f"TG send: silent={msg.silent}, content={msg.content[:50]!r}")
+        if msg.silent:
+            logger.info(f"Silent response for chat {msg.chat_id}, not sending")
+            return
+
         try:
             # chat_id should be the Telegram chat ID (integer)
             chat_id = int(msg.chat_id)
