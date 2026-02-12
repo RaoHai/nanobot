@@ -331,6 +331,14 @@ def gateway(
     cron_store_path = get_data_dir() / "cron" / "jobs.json"
     cron = CronService(cron_store_path)
     
+    # Build thinking config if enabled
+    thinking_config = None
+    if config.agents.defaults.thinking.enabled:
+        thinking_config = {
+            "type": "enabled",
+            "budget_tokens": config.agents.defaults.thinking.budget_tokens,
+        }
+    
     # Create agent with cron service
     agent = AgentLoop(
         bus=bus,
@@ -347,6 +355,8 @@ def gateway(
         restrict_to_workspace=config.tools.restrict_to_workspace,
         session_manager=session_manager,
         mcp_servers=config.tools.mcp_servers,
+        effort=config.agents.defaults.effort,
+        thinking=thinking_config,
     )
     
     # Set cron callback (needs agent)
@@ -444,6 +454,14 @@ def agent(
     else:
         logger.disable("nanobot")
     
+    # Build thinking config if enabled
+    thinking_config = None
+    if config.agents.defaults.thinking.enabled:
+        thinking_config = {
+            "type": "enabled",
+            "budget_tokens": config.agents.defaults.thinking.budget_tokens,
+        }
+    
     agent_loop = AgentLoop(
         bus=bus,
         provider=provider,
@@ -457,6 +475,8 @@ def agent(
         exec_config=config.tools.exec,
         restrict_to_workspace=config.tools.restrict_to_workspace,
         mcp_servers=config.tools.mcp_servers,
+        effort=config.agents.defaults.effort,
+        thinking=thinking_config,
     )
     
     # Show spinner when logs are off (no output to miss); skip when logs are on
