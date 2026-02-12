@@ -107,6 +107,8 @@ class LiteLLMProvider(LLMProvider):
         model: str | None = None,
         max_tokens: int = 4096,
         temperature: float = 0.7,
+        effort: str | None = None,
+        thinking: dict[str, Any] | None = None,
     ) -> LLMResponse:
         """
         Send a chat completion request via LiteLLM.
@@ -117,6 +119,8 @@ class LiteLLMProvider(LLMProvider):
             model: Model identifier (e.g., 'anthropic/claude-sonnet-4-5').
             max_tokens: Maximum tokens in response.
             temperature: Sampling temperature.
+            effort: Anthropic effort level ("low", "medium", "high", "max").
+            thinking: Extended thinking config {"type": "enabled", "budget_tokens": N}.
         
         Returns:
             LLMResponse with content and/or tool calls.
@@ -133,6 +137,14 @@ class LiteLLMProvider(LLMProvider):
             "max_tokens": max_tokens,
             "temperature": temperature,
         }
+        
+        # Anthropic-specific: effort parameter (Claude 4.5+)
+        if effort and "anthropic" in model.lower():
+            kwargs["effort"] = effort
+        
+        # Anthropic-specific: extended thinking
+        if thinking and "anthropic" in model.lower():
+            kwargs["thinking"] = thinking
         
         # Apply model-specific overrides (e.g. kimi-k2.5 temperature)
         self._apply_model_overrides(model, kwargs)
