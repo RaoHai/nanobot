@@ -154,13 +154,22 @@ class ChannelsConfig(BaseModel):
     qq: QQConfig = Field(default_factory=QQConfig)
 
 
+class ThinkingConfig(BaseModel):
+    """Extended thinking configuration for Anthropic models."""
+    enabled: bool = False
+    budget_tokens: int = 10000  # Token budget for thinking (1024-100000)
+
+
 class AgentDefaults(BaseModel):
     """Default agent configuration."""
     workspace: str = "~/.nanobot/workspace"
     model: str = "anthropic/claude-opus-4-5"
     max_tokens: int = 8192
     temperature: float = 0.7
-    max_tool_iterations: int = 20
+    max_tool_iterations: int = 50
+    # Anthropic-specific parameters
+    effort: str | None = None  # "low", "medium", "high", "max" (Claude 4.5+ only)
+    thinking: ThinkingConfig = Field(default_factory=ThinkingConfig)  # Extended thinking
 
 
 class AgentsConfig(BaseModel):
