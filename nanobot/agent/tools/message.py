@@ -40,7 +40,8 @@ class MessageTool(Tool):
     def description(self) -> str:
         return (
             "Send a message to the user. Use this when you want to communicate something. "
-            "You can optionally attach images by providing local file paths in the media parameter."
+            "You can optionally attach images by providing local file paths in the media parameter. "
+            "For Telegram, you can send a sticker by setting send_sticker to a file_id string, or true to use the last received sticker."
         )
 
     @property
@@ -64,6 +65,13 @@ class MessageTool(Tool):
                     "type": "array",
                     "items": {"type": "string"},
                     "description": "Optional: list of local file paths to images to send"
+                },
+                "send_sticker": {
+                    "anyOf": [
+                        {"type": "boolean"},
+                        {"type": "string"}
+                    ],
+                    "description": "Optional: if true, send the last received sticker; if a string, send the sticker with that file_id (Telegram only)"
                 }
             },
             "required": ["content"]
@@ -75,6 +83,7 @@ class MessageTool(Tool):
         channel: str | None = None,
         chat_id: str | None = None,
         media: list[str] | None = None,
+        send_sticker: bool | str = False,
         **kwargs: Any
     ) -> str:
         channel = channel or self._default_channel
@@ -86,18 +95,35 @@ class MessageTool(Tool):
         if not self._send_callback:
             return "Error: Message sending not configured"
 
+        # Prepare metadata - include sticker_file_id if send_sticker is set
+        metadata = dict(self._default_metadata)
+        if send_sticker:
+            if isinstance(send_sticker, str):
+                # Use the provided file_id
+                metadata["sticker_file_id"] = send_sticker
+            elif "sticker_file_id" in self._default_metadata:
+                # Use the last received sticker
+                pass
+            else:
+                return "Error: No sticker available to send"
+        else:
+            # Remove sticker_file_id if not sending sticker
+            metadata.pop("sticker_file_id", None)
+
         msg = OutboundMessage(
             channel=channel,
             chat_id=chat_id,
             content=content,
             media=[str(Path(p).expanduser()) for p in media] if media else [],
-            metadata=self._default_metadata,
+            metadata=metadata,
         )
 
         try:
             await self._send_callback(msg)
             parts = [f"Message sent to {channel}:{chat_id}"]
-            if media:
+            if send_sticker:
+                parts.append(" (sticker)")
+            elif media:
                 parts.append(f" with {len(media)} image(s)")
             return "".join(parts)
         except Exception as e:

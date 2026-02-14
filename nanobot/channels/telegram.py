@@ -138,11 +138,11 @@ class TelegramChannel(BaseChannel):
         self._app.add_handler(CommandHandler("reset", self._on_reset))
         self._app.add_handler(CommandHandler("help", self._on_help))
 
-        # Add message handler for text, photos, voice, documents
+        # Add message handler for text, photos, voice, documents, stickers
         self._app.add_handler(
             MessageHandler(
-                (filters.TEXT | filters.PHOTO | filters.VOICE | filters.AUDIO | filters.Document.ALL) 
-                & ~filters.COMMAND, 
+                (filters.TEXT | filters.PHOTO | filters.VOICE | filters.AUDIO | filters.Document.ALL | filters.Sticker.ALL)
+                & ~filters.COMMAND,
                 self._on_message
             )
         )
@@ -193,10 +193,10 @@ class TelegramChannel(BaseChannel):
         if not self._app:
             logger.warning("Telegram bot not running")
             return
-        
+
         # Stop typing indicator for this chat
         self._stop_typing(msg.chat_id)
-        
+
         try:
             # chat_id should be the Telegram chat ID (integer)
             chat_id = int(msg.chat_id)
@@ -206,6 +206,12 @@ class TelegramChannel(BaseChannel):
                 chat_id,
                 reply_to_message_id,
             )
+
+            # Check if we should send a sticker
+            sticker_file_id = msg.metadata.get("sticker_file_id") if msg.metadata else None
+            if sticker_file_id:
+                await self._send_sticker(chat_id, sticker_file_id, reply_to_message_id)
+                return
 
             # Check for media (images)
             valid_media = [p for p in (msg.media or []) if Path(p).is_file()]
@@ -218,17 +224,6 @@ class TelegramChannel(BaseChannel):
         except ValueError:
             logger.error(f"Invalid chat_id: {msg.chat_id}")
         except Exception as e:
-<<<<<<< HEAD
-            # Fallback to plain text if HTML parsing fails
-            logger.warning(f"HTML parse failed, falling back to plain text: {e}")
-            try:
-                await self._app.bot.send_message(
-                    chat_id=int(msg.chat_id),
-                    text=msg.content
-                )
-            except Exception as e2:
-                logger.error(f"Error sending Telegram message: {e2}")
-=======
             logger.error(f"Error sending Telegram message: {e}")
 
     async def _send_text(self, chat_id: int, content: str, reply_to_message_id: int | None) -> None:
@@ -252,6 +247,18 @@ class TelegramChannel(BaseChannel):
                 fallback_kwargs["reply_to_message_id"] = reply_to_message_id
                 fallback_kwargs["allow_sending_without_reply"] = True
             await self._app.bot.send_message(**fallback_kwargs)
+
+    async def _send_sticker(self, chat_id: int, sticker_file_id: str, reply_to_message_id: int | None) -> None:
+        """Send a sticker."""
+        send_kwargs: dict = {
+            "chat_id": chat_id,
+            "sticker": sticker_file_id,
+        }
+        if reply_to_message_id is not None:
+            send_kwargs["reply_to_message_id"] = reply_to_message_id
+            send_kwargs["allow_sending_without_reply"] = True
+        await self._app.bot.send_sticker(**send_kwargs)
+        logger.info(f"Sent sticker to chat_id={chat_id}")
 
     async def _send_with_media(self, chat_id: int, content: str, media_paths: list[str], reply_to_message_id: int | None) -> None:
         """Send message with photo(s)."""
@@ -318,8 +325,7 @@ class TelegramChannel(BaseChannel):
             "Send me a message and I'll respond!\n"
             "Type /help to see available commands."
         )
-    
-<<<<<<< HEAD
+
     async def _forward_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Forward slash commands to the bus for unified handling in AgentLoop."""
         if not update.message or not update.effective_user:
@@ -329,12 +335,12 @@ class TelegramChannel(BaseChannel):
             chat_id=str(update.message.chat_id),
             content=update.message.text,
         )
-=======
+
     async def _on_reset(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /reset command — clear conversation history."""
         if not update.message or not update.effective_user:
             return
-        
+
         chat_id = str(update.message.chat_id)
         session_key = f"{self.name}:{chat_id}"
         
@@ -364,10 +370,9 @@ class TelegramChannel(BaseChannel):
             "Just send me a text message to chat!"
         )
         await update.message.reply_text(help_text, parse_mode="HTML")
->>>>>>> 440cf4d (feat: add media/image support for Telegram channel (from jing's PR #589))
-    
+
     async def _on_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Handle incoming messages (text, photos, voice, documents)."""
+        """Handle incoming messages (text, photos, stickers, voice, documents)."""
         if not update.message or not update.effective_user:
             return
         
@@ -386,8 +391,6 @@ class TelegramChannel(BaseChannel):
         # Build content from text and/or media
         content_parts = []
         media_paths = []
-<<<<<<< HEAD
-=======
         is_group = message.chat.type != "private"
         sender_context = self._build_sender_context(message, user)
         if sender_context:
@@ -403,18 +406,33 @@ class TelegramChannel(BaseChannel):
                 reply_meta.get("reply_to_message_id"),
                 reply_meta.get("reply_to_user_id"),
             )
->>>>>>> 440cf4d (feat: add media/image support for Telegram channel (from jing's PR #589))
-        
+
         # Text content
         if message.text:
             content_parts.append(message.text)
         if message.caption:
             content_parts.append(message.caption)
-        
+
+        # Handle sticker as emoji (no need to download)
+        sticker_file_id = None
+        sticker_set_name = None
+        if message.sticker:
+            sticker_emoji = message.sticker.emoji or "🎨"
+            sticker_file_id = message.sticker.file_id
+            sticker_set_name = getattr(message.sticker, "set_name", None)
+
+            sticker_info = f"{sticker_emoji} [sticker_id: {sticker_file_id}"
+            if sticker_set_name:
+                sticker_info += f", set: {sticker_set_name}"
+            sticker_info += "]"
+            content_parts.append(sticker_info)
+
+            logger.debug(f"Received sticker with emoji: {sticker_emoji}, file_id: {sticker_file_id}, set: {sticker_set_name}")
+
         # Handle media files
         media_file = None
         media_type = None
-        
+
         if message.photo:
             media_file = message.photo[-1]  # Largest photo
             media_type = "image"
@@ -485,6 +503,8 @@ class TelegramChannel(BaseChannel):
                 "sender_display": self._resolve_sender_display(user),
                 "chat_title": getattr(message.chat, "title", None),
                 "is_group": is_group,
+                "sticker_file_id": sticker_file_id,
+                "sticker_set_name": sticker_set_name,
                 **reply_meta,
             }
         )
@@ -511,25 +531,23 @@ class TelegramChannel(BaseChannel):
             pass
         except Exception as e:
             logger.debug(f"Typing indicator stopped for {chat_id}: {e}")
-    
-<<<<<<< HEAD
+
     async def _on_error(self, update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Log polling / handler errors instead of silently swallowing them."""
         logger.error(f"Telegram error: {context.error}")
 
-=======
->>>>>>> 440cf4d (feat: add media/image support for Telegram channel (from jing's PR #589))
     def _get_extension(self, media_type: str, mime_type: str | None) -> str:
         """Get file extension based on media type."""
         if mime_type:
             ext_map = {
                 "image/jpeg": ".jpg", "image/png": ".png", "image/gif": ".gif",
                 "audio/ogg": ".ogg", "audio/mpeg": ".mp3", "audio/mp4": ".m4a",
+                "image/webp": ".webp", "video/webm": ".webm",
             }
             if mime_type in ext_map:
                 return ext_map[mime_type]
-        
-        type_map = {"image": ".jpg", "voice": ".ogg", "audio": ".mp3", "file": ""}
+
+        type_map = {"image": ".jpg", "sticker": ".webp", "voice": ".ogg", "audio": ".mp3", "file": ""}
         return type_map.get(media_type, "")
 
     @staticmethod
