@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from loguru import logger
-from telegram import BotCommand, InputMediaPhoto, Update
+from telegram import BotCommand, InputMediaPhoto, ReactionTypeEmoji, Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
 from nanobot.bus.events import OutboundMessage
@@ -202,6 +202,16 @@ class TelegramChannel(BaseChannel):
                 reply_to_message_id,
             )
 
+            # Check if we should send a reaction
+            if msg.reaction:
+                reaction_to_msg_id = msg.metadata.get("reaction_to_message_id") if msg.metadata else None
+                if reaction_to_msg_id:
+                    await self._send_reaction(chat_id, int(reaction_to_msg_id), msg.reaction)
+                    if not msg.content:  # If only reaction, no text, return early
+                        return
+                else:
+                    logger.warning("reaction specified but no reaction_to_message_id in metadata")
+
             # Check if we should send a sticker
             sticker_file_id = msg.metadata.get("sticker_file_id") if msg.metadata else None
             if sticker_file_id:
@@ -242,6 +252,18 @@ class TelegramChannel(BaseChannel):
                 fallback_kwargs["reply_to_message_id"] = reply_to_message_id
                 fallback_kwargs["allow_sending_without_reply"] = True
             await self._app.bot.send_message(**fallback_kwargs)
+
+    async def _send_reaction(self, chat_id: int, message_id: int, emoji: str) -> None:
+        """Send a reaction to a message."""
+        try:
+            await self._app.bot.set_message_reaction(
+                chat_id=chat_id,
+                message_id=message_id,
+                reaction=[ReactionTypeEmoji(emoji=emoji)],
+            )
+            logger.info(f"Sent reaction {emoji} to message {message_id} in chat {chat_id}")
+        except Exception as e:
+            logger.error(f"Failed to send reaction: {e}")
 
     async def _send_sticker(self, chat_id: int, sticker_file_id: str, reply_to_message_id: int | None) -> None:
         """Send a sticker."""
@@ -624,6 +646,7 @@ class TelegramChannel(BaseChannel):
             return ""
         sender = cls._resolve_sender_display(user)
         chat_title = getattr(message.chat, "title", None)
+        msg_id = message.message_id
         if chat_title:
-            return f"[from: {sender}, group: {chat_title}]"
-        return f"[from: {sender}]"
+            return f"[from: {sender}, group: {chat_title}, msg_id: {msg_id}]"
+        return f"[from: {sender}, msg_id: {msg_id}]"

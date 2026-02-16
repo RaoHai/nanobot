@@ -36,7 +36,7 @@ class Session:
         self.messages.append(msg)
         self.updated_at = datetime.now()
     
-    def get_history(self, max_messages: int = 50) -> list[dict[str, Any]]:
+    def get_history(self, max_messages: int = 75) -> list[dict[str, Any]]:
         """
         Get message history for LLM context.
         
@@ -49,8 +49,31 @@ class Session:
         # Get recent messages
         recent = self.messages[-max_messages:] if len(self.messages) > max_messages else self.messages
         
-        # Convert to LLM format (just role and content)
-        return [{"role": m["role"], "content": m["content"]} for m in recent]
+        # Convert to LLM format, merging tool call summaries into assistant messages
+        result = []
+        i = 0
+        while i < len(recent):
+            msg = recent[i]
+            role = msg["role"]
+            content = msg["content"]
+            
+            # Check if next message is a system tool call summary
+            if role == "assistant" and i + 1 < len(recent):
+                next_msg = recent[i + 1]
+                if next_msg["role"] == "system" and next_msg["content"].startswith("Tool calls:"):
+                    # Merge tool call summary into assistant message
+                    content = f"{content}\n\n{next_msg['content']}"
+                    i += 1  # Skip the system message
+            
+            # Skip standalone system tool call messages (already merged or orphaned)
+            if role == "system" and content.startswith("Tool calls:"):
+                i += 1
+                continue
+            
+            result.append({"role": role, "content": content})
+            i += 1
+        
+        return result
     
     def clear(self) -> None:
         """Clear all messages in the session."""

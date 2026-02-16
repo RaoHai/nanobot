@@ -191,6 +191,7 @@ class AgentLoop:
         # Agent loop
         iteration = 0
         final_content = None
+        tool_call_summaries = []  # Collect tool calls for session history
 
         while iteration < self.max_iterations:
             iteration += 1
@@ -203,6 +204,19 @@ class AgentLoop:
                 effort=self.effort,
                 thinking=self.thinking,
             )
+
+            # Log token usage
+            if response.usage:
+                u = response.usage
+                usage_str = f"Token usage: prompt={u.get('prompt_tokens', 0)}, completion={u.get('completion_tokens', 0)}, total={u.get('total_tokens', 0)}"
+                # Add cache stats if available
+                cache_create = u.get('cache_creation_input_tokens', 0)
+                cache_read = u.get('cache_read_input_tokens', 0)
+                if cache_create or cache_read:
+                    total_input = cache_create + cache_read + u.get('prompt_tokens', 0)
+                    hit_rate = (cache_read / total_input * 100) if total_input > 0 else 0
+                    usage_str += f" | cache: create={cache_create}, read={cache_read}, hit_rate={hit_rate:.1f}%"
+                logger.info(usage_str)
 
             # Handle tool calls
             if response.has_tool_calls:
@@ -231,6 +245,9 @@ class AgentLoop:
                     messages = self.context.add_tool_result(
                         messages, tool_call.id, tool_call.name, result
                     )
+                    # Collect summary for session history
+                    result_preview = result[:200] + "..." if len(result) > 200 else result
+                    tool_call_summaries.append(f"[Tool: {tool_call.name}({args_str[:100]})] → {result_preview}")
             else:
                 # No tool calls, we're done
                 final_content = response.content
@@ -245,6 +262,8 @@ class AgentLoop:
             logger.info(f"Silent response for {msg.channel}:{msg.sender_id} (agent chose not to respond)")
             # Still save to session so context is preserved
             session.add_message("user", msg.content)
+            if tool_call_summaries:
+                session.add_message("system", "Tool calls:\n" + "\n".join(tool_call_summaries))
             session.add_message("assistant", f"(silent: {final_content})")
             self.sessions.save(session)
             # Return a silent message to trigger channel cleanup (e.g., stop typing indicator)
@@ -259,8 +278,11 @@ class AgentLoop:
         preview = final_content[:120] + "..." if len(final_content) > 120 else final_content
         logger.info(f"Response to {msg.channel}:{msg.sender_id}: {preview}")
 
-        # Save to session
+        # Save to session (with tool call summaries if any)
         session.add_message("user", msg.content)
+        if tool_call_summaries:
+            # Add tool calls as a separate system message for context
+            session.add_message("system", "Tool calls:\n" + "\n".join(tool_call_summaries))
         session.add_message("assistant", final_content)
         self.sessions.save(session)
 
@@ -318,6 +340,7 @@ class AgentLoop:
         # Agent loop (limited for announce handling)
         iteration = 0
         final_content = None
+        tool_call_summaries = []  # Collect tool calls for session history
 
         while iteration < self.max_iterations:
             iteration += 1
@@ -329,6 +352,19 @@ class AgentLoop:
                 effort=self.effort,
                 thinking=self.thinking,
             )
+
+            # Log token usage
+            if response.usage:
+                u = response.usage
+                usage_str = f"Token usage: prompt={u.get('prompt_tokens', 0)}, completion={u.get('completion_tokens', 0)}, total={u.get('total_tokens', 0)}"
+                # Add cache stats if available
+                cache_create = u.get('cache_creation_input_tokens', 0)
+                cache_read = u.get('cache_read_input_tokens', 0)
+                if cache_create or cache_read:
+                    total_input = cache_create + cache_read + u.get('prompt_tokens', 0)
+                    hit_rate = (cache_read / total_input * 100) if total_input > 0 else 0
+                    usage_str += f" | cache: create={cache_create}, read={cache_read}, hit_rate={hit_rate:.1f}%"
+                logger.info(usage_str)
 
             if response.has_tool_calls:
                 tool_call_dicts = [
@@ -354,6 +390,9 @@ class AgentLoop:
                     messages = self.context.add_tool_result(
                         messages, tool_call.id, tool_call.name, result
                     )
+                    # Collect summary for session history
+                    result_preview = result[:200] + "..." if len(result) > 200 else result
+                    tool_call_summaries.append(f"[Tool: {tool_call.name}({args_str[:100]})] → {result_preview}")
             else:
                 final_content = response.content
                 break
@@ -363,6 +402,8 @@ class AgentLoop:
 
         # Save to session (mark as system message in history)
         session.add_message("user", f"[System: {msg.sender_id}] {msg.content}")
+        if tool_call_summaries:
+            session.add_message("system", "Tool calls:\n" + "\n".join(tool_call_summaries))
         session.add_message("assistant", final_content)
         self.sessions.save(session)
 
