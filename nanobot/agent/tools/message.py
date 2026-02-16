@@ -72,6 +72,14 @@ class MessageTool(Tool):
                         {"type": "string"}
                     ],
                     "description": "Optional: if true, send the last received sticker; if a string, send the sticker with that file_id (Telegram only)"
+                },
+                "reaction": {
+                    "type": "string",
+                    "description": "Optional: emoji reaction to add to a message (e.g., '👍', '❤️', '🔥'). Telegram only."
+                },
+                "message_id": {
+                    "type": "integer",
+                    "description": "Optional: target message ID for reaction. If not provided, reacts to the last received message."
                 }
             },
             "required": ["content"]
@@ -84,6 +92,8 @@ class MessageTool(Tool):
         chat_id: str | None = None,
         media: list[str] | None = None,
         send_sticker: bool | str = False,
+        reaction: str | None = None,
+        message_id: int | None = None,
         **kwargs: Any
     ) -> str:
         channel = channel or self._default_channel
@@ -97,6 +107,16 @@ class MessageTool(Tool):
 
         # Prepare metadata - include sticker_file_id if send_sticker is set
         metadata = dict(self._default_metadata)
+        
+        # If reaction is specified, determine target message_id
+        if reaction:
+            if message_id:
+                # Use explicitly provided message_id
+                metadata["reaction_to_message_id"] = message_id
+            elif "message_id" in metadata:
+                # Fall back to last received message
+                metadata["reaction_to_message_id"] = metadata["message_id"]
+        
         if send_sticker:
             if isinstance(send_sticker, str):
                 # Use the provided file_id
@@ -116,12 +136,15 @@ class MessageTool(Tool):
             content=content,
             media=[str(Path(p).expanduser()) for p in media] if media else [],
             metadata=metadata,
+            reaction=reaction,
         )
 
         try:
             await self._send_callback(msg)
             parts = [f"Message sent to {channel}:{chat_id}"]
-            if send_sticker:
+            if reaction:
+                parts.append(f" (reacted with {reaction})")
+            elif send_sticker:
                 parts.append(" (sticker)")
             elif media:
                 parts.append(f" with {len(media)} image(s)")

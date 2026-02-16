@@ -426,6 +426,17 @@ def agent(
     
     config = load_config()
     
+    # 配置日志文件
+    log_file = config.workspace_path / "logs" / "nanobot.log"
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+    logger.add(
+        log_file,
+        rotation="10 MB",
+        retention="7 days",
+        format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}",
+        level="INFO",
+    )
+    
     bus = MessageBus()
     provider = _make_provider(config)
 

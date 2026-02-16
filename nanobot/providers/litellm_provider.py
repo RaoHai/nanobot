@@ -199,6 +199,21 @@ class LiteLLMProvider(LLMProvider):
                 "completion_tokens": response.usage.completion_tokens,
                 "total_tokens": response.usage.total_tokens,
             }
+            # Add cache stats if available (Anthropic prompt caching)
+            if hasattr(response.usage, "cache_creation_input_tokens"):
+                usage["cache_creation_input_tokens"] = response.usage.cache_creation_input_tokens
+            if hasattr(response.usage, "cache_read_input_tokens"):
+                usage["cache_read_input_tokens"] = response.usage.cache_read_input_tokens
+            
+            # Log cache stats like 姐姐 does! 🐕
+            cache_create = usage.get("cache_creation_input_tokens", 0)
+            cache_read = usage.get("cache_read_input_tokens", 0)
+            if cache_create or cache_read:
+                hit_rate = cache_read / (cache_create + cache_read) * 100 if (cache_create + cache_read) > 0 else 0
+                import logging
+                logging.getLogger(__name__).info(
+                    f"🐕 Cache: create={cache_create}, read={cache_read}, hit_rate={hit_rate:.1f}%"
+                )
         
         reasoning_content = getattr(message, "reasoning_content", None)
         

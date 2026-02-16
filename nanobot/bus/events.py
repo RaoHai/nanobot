@@ -34,5 +34,6 @@ class OutboundMessage:
     media: list[str] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
     silent: bool = False  # If True, don't send content but still trigger channel cleanup (e.g., stop typing)
+    reaction: str | None = None  # Emoji reaction to add to a message (requires reaction_to_message_id in metadata)
 
 
