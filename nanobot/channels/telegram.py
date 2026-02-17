@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 from loguru import logger
 from telegram import BotCommand, InputMediaPhoto, ReactionTypeEmoji, Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.request import HTTPXRequest
 
 from nanobot.bus.events import OutboundMessage
 from nanobot.bus.queue import MessageBus
@@ -95,6 +96,7 @@ class TelegramChannel(BaseChannel):
     # Commands registered with Telegram's command menu
     BOT_COMMANDS = [
         BotCommand("start", "Start the bot"),
+        BotCommand("new", "Start a new conversation"),
         BotCommand("reset", "Reset conversation history"),
         BotCommand("help", "Show available commands"),
     ]
@@ -104,7 +106,7 @@ class TelegramChannel(BaseChannel):
         config: TelegramConfig,
         bus: MessageBus,
         groq_api_key: str = "",
-        session_manager: SessionManager | None = None,
+        session_manager: "SessionManager | None" = None,
     ):
         super().__init__(config, bus)
         self.config: TelegramConfig = config
@@ -121,18 +123,21 @@ class TelegramChannel(BaseChannel):
             return
         
         self._running = True
-        
-        # Build the application
-        builder = Application.builder().token(self.config.token)
+
+        # Build the application with larger connection pool to avoid pool-timeout on long runs
+        req = HTTPXRequest(connection_pool_size=16, pool_timeout=5.0, connect_timeout=30.0, read_timeout=30.0)
+        builder = Application.builder().token(self.config.token).request(req).get_updates_request(req)
         if self.config.proxy:
             builder = builder.proxy(self.config.proxy).get_updates_proxy(self.config.proxy)
         self._app = builder.build()
-        
+        self._app.add_error_handler(self._on_error)
+
         # Add command handlers
         self._app.add_handler(CommandHandler("start", self._on_start))
+        self._app.add_handler(CommandHandler("new", self._forward_command))
         self._app.add_handler(CommandHandler("reset", self._on_reset))
         self._app.add_handler(CommandHandler("help", self._on_help))
-        
+
         # Add message handler for text, photos, voice, documents, stickers
         self._app.add_handler(
             MessageHandler(
@@ -329,7 +334,7 @@ class TelegramChannel(BaseChannel):
         except (TypeError, ValueError):
             logger.debug("Invalid explicit Telegram reply target: {}", msg.reply_to)
             return None
-    
+
     async def _on_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /start command."""
         if not update.message or not update.effective_user:
@@ -341,12 +346,22 @@ class TelegramChannel(BaseChannel):
             "Send me a message and I'll respond!\n"
             "Type /help to see available commands."
         )
-    
+
+    async def _forward_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Forward slash commands to the bus for unified handling in AgentLoop."""
+        if not update.message or not update.effective_user:
+            return
+        await self._handle_message(
+            sender_id=str(update.effective_user.id),
+            chat_id=str(update.message.chat_id),
+            content=update.message.text,
+        )
+
     async def _on_reset(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /reset command — clear conversation history."""
         if not update.message or not update.effective_user:
             return
-        
+
         chat_id = str(update.message.chat_id)
         session_key = f"{self.name}:{chat_id}"
         
@@ -376,7 +391,7 @@ class TelegramChannel(BaseChannel):
             "Just send me a text message to chat!"
         )
         await update.message.reply_text(help_text, parse_mode="HTML")
-    
+
     async def _on_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle incoming messages (text, photos, stickers, voice, documents)."""
         if not update.message or not update.effective_user:
@@ -412,7 +427,7 @@ class TelegramChannel(BaseChannel):
                 reply_meta.get("reply_to_message_id"),
                 reply_meta.get("reply_to_user_id"),
             )
-        
+
         # Text content
         if message.text:
             content_parts.append(message.text)
@@ -537,7 +552,11 @@ class TelegramChannel(BaseChannel):
             pass
         except Exception as e:
             logger.debug(f"Typing indicator stopped for {chat_id}: {e}")
-    
+
+    async def _on_error(self, update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Log polling / handler errors instead of silently swallowing them."""
+        logger.error(f"Telegram error: {context.error}")
+
     def _get_extension(self, media_type: str, mime_type: str | None) -> str:
         """Get file extension based on media type."""
         if mime_type:
