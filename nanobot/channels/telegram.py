@@ -84,6 +84,26 @@ def _markdown_to_telegram_html(text: str) -> str:
     return text
 
 
+def _split_message(content: str, max_len: int = 4000) -> list[str]:
+    """Split content into chunks within max_len, preferring line breaks."""
+    if len(content) <= max_len:
+        return [content]
+    chunks: list[str] = []
+    while content:
+        if len(content) <= max_len:
+            chunks.append(content)
+            break
+        cut = content[:max_len]
+        pos = cut.rfind('\n')
+        if pos == -1:
+            pos = cut.rfind(' ')
+        if pos == -1:
+            pos = max_len
+        chunks.append(content[:pos])
+        content = content[pos:].lstrip()
+    return chunks
+
+
 class TelegramChannel(BaseChannel):
     """
     Telegram channel using long polling.
@@ -198,7 +218,6 @@ class TelegramChannel(BaseChannel):
         self._stop_typing(msg.chat_id)
 
         try:
-            # chat_id should be the Telegram chat ID (integer)
             chat_id = int(msg.chat_id)
             reply_to_message_id = self._resolve_reply_to_message_id(msg)
             logger.debug(
@@ -237,26 +256,31 @@ class TelegramChannel(BaseChannel):
             logger.error(f"Error sending Telegram message: {e}")
 
     async def _send_text(self, chat_id: int, content: str, reply_to_message_id: int | None) -> None:
-        """Send a text-only message."""
-        html_content = _markdown_to_telegram_html(content)
-        send_kwargs: dict = {
-            "chat_id": chat_id,
-            "text": html_content,
-            "parse_mode": "HTML",
-        }
-        if reply_to_message_id is not None:
-            send_kwargs["reply_to_message_id"] = reply_to_message_id
-            send_kwargs["allow_sending_without_reply"] = True
-        try:
-            await self._app.bot.send_message(**send_kwargs)
-        except Exception:
-            # Fallback to plain text if HTML parsing fails
-            logger.warning("HTML parse failed, falling back to plain text")
-            fallback_kwargs: dict = {"chat_id": chat_id, "text": content}
-            if reply_to_message_id is not None:
-                fallback_kwargs["reply_to_message_id"] = reply_to_message_id
-                fallback_kwargs["allow_sending_without_reply"] = True
-            await self._app.bot.send_message(**fallback_kwargs)
+        """Send a text-only message, splitting if necessary."""
+        # Split message if too long
+        chunks = _split_message(content)
+
+        for i, chunk in enumerate(chunks):
+            html_content = _markdown_to_telegram_html(chunk)
+            send_kwargs: dict = {
+                "chat_id": chat_id,
+                "text": html_content,
+                "parse_mode": "HTML",
+            }
+            # Only reply to the first chunk
+            if i == 0 and reply_to_message_id is not None:
+                send_kwargs["reply_to_message_id"] = reply_to_message_id
+                send_kwargs["allow_sending_without_reply"] = True
+            try:
+                await self._app.bot.send_message(**send_kwargs)
+            except Exception:
+                # Fallback to plain text if HTML parsing fails
+                logger.warning("HTML parse failed, falling back to plain text")
+                fallback_kwargs: dict = {"chat_id": chat_id, "text": chunk}
+                if i == 0 and reply_to_message_id is not None:
+                    fallback_kwargs["reply_to_message_id"] = reply_to_message_id
+                    fallback_kwargs["allow_sending_without_reply"] = True
+                await self._app.bot.send_message(**fallback_kwargs)
 
     async def _send_reaction(self, chat_id: int, message_id: int, emoji: str) -> None:
         """Send a reaction to a message."""
@@ -339,7 +363,7 @@ class TelegramChannel(BaseChannel):
         """Handle /start command."""
         if not update.message or not update.effective_user:
             return
-        
+
         user = update.effective_user
         await update.message.reply_text(
             f"👋 Hi {user.first_name}! I'm nanobot.\n\n"
@@ -347,12 +371,18 @@ class TelegramChannel(BaseChannel):
             "Type /help to see available commands."
         )
 
+    @staticmethod
+    def _sender_id(user) -> str:
+        """Build sender_id with username for allowlist matching."""
+        sid = str(user.id)
+        return f"{sid}|{user.username}" if user.username else sid
+
     async def _forward_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Forward slash commands to the bus for unified handling in AgentLoop."""
         if not update.message or not update.effective_user:
             return
         await self._handle_message(
-            sender_id=str(update.effective_user.id),
+            sender_id=self._sender_id(update.effective_user),
             chat_id=str(update.message.chat_id),
             content=update.message.text,
         )
@@ -400,11 +430,7 @@ class TelegramChannel(BaseChannel):
         message = update.message
         user = update.effective_user
         chat_id = message.chat_id
-        
-        # Use stable numeric ID, but keep username for allowlist compatibility
-        sender_id = str(user.id)
-        if user.username:
-            sender_id = f"{sender_id}|{user.username}"
+        sender_id = self._sender_id(user)
         
         # Store chat_id for replies
         self._chat_ids[sender_id] = chat_id
