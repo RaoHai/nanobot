@@ -292,8 +292,9 @@ class AgentLoop:
             return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id,
                                   content="🐈 nanobot commands:\n/new — Start a new conversation\n/help — Show available commands")
         
-        if len(session.messages) > self.memory_window:
-            asyncio.create_task(self._consolidate_memory(session))
+        # DISABLED: memory consolidation was causing issues (套娃 silent bug)
+        # if len(session.messages) > self.memory_window:
+        #     asyncio.create_task(self._consolidate_memory(session))
 
         self._set_tool_context(msg.channel, msg.chat_id)
         initial_messages = self.context.build_messages(
