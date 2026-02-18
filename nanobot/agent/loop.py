@@ -233,6 +233,9 @@ class AgentLoop:
                         chat_id=msg.chat_id,
                         content=f"Sorry, I encountered an error: {str(e)}"
                     ))
+                finally:
+                    # Flush buffered messages for this session
+                    await self.bus.complete_inbound_turn(msg)
             except asyncio.TimeoutError:
                 continue
     
