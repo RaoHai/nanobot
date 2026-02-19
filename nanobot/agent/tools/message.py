@@ -41,7 +41,10 @@ class MessageTool(Tool):
         return (
             "Send a message to the user. Use this when you want to communicate something. "
             "You can optionally attach images by providing local file paths in the media parameter. "
-            "For Telegram, you can send a sticker by setting send_sticker to a file_id string, or true to use the last received sticker."
+            "For Telegram, you can send a sticker by setting send_sticker to a file_id string, or true to use the last received sticker.\n\n"
+            "IMPORTANT USAGE RULES:\n"
+            "1. For simple text replies, just output text directly - DO NOT use this tool! Only use this tool when you need sticker/reaction/media/specific chat_id.\n"
+            "2. When sending sticker or reaction, content MUST be empty string ''! Do not write '[SILENT]' or any text."
         )
 
     @property
