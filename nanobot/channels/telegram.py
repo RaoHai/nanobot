@@ -229,6 +229,13 @@ class TelegramChannel(BaseChannel):
         # Stop typing indicator for this chat
         self._stop_typing(msg.chat_id)
 
+        # Silent message: only stop typing, don't send anything
+        # Check both the silent flag and content markers
+        silent_markers = ["[NO_RESPONSE]", "[SILENT]", "[SKIP]"]
+        if msg.silent or any(marker in msg.content for marker in silent_markers):
+            logger.debug(f"Silent message for chat_id={msg.chat_id}, skipping send")
+            return
+
         try:
             chat_id = int(msg.chat_id)
             reply_to_message_id = self._resolve_reply_to_message_id(msg)
