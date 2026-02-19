@@ -202,11 +202,9 @@ class AgentLoop:
             )
 
             if response.has_tool_calls:
-                if on_progress:
-                    clean = self._strip_think(response.content)
-                    # Only send meaningful content, not tool hints
-                    if clean:
-                        await on_progress(clean)
+                # Don't send intermediate content during tool calls
+                # Only the final response should be sent to avoid spamming the chat
+                pass
 
                 tool_call_dicts = [
                     {
