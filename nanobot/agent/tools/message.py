@@ -67,7 +67,7 @@ class MessageTool(Tool):
                 "media": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Optional: list of local file paths to images to send"
+                    "description": "Optional: list of file paths to attach (images, audio, documents)"
                 },
                 "send_sticker": {
                     "anyOf": [
@@ -150,7 +150,7 @@ class MessageTool(Tool):
             elif send_sticker:
                 parts.append(" (sticker)")
             elif media:
-                parts.append(f" with {len(media)} image(s)")
+                parts.append(f" with {len(media)} attachment(s)")
             return "".join(parts)
         except Exception as e:
             return f"Error sending message: {str(e)}"
