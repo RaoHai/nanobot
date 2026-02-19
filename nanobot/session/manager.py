@@ -49,7 +49,7 @@ class Session:
             max_messages: Maximum messages to return.
 
         Returns:
-            List of messages in LLM format.
+            List of messages in LLM format, preserving tool metadata.
         """
         # Get recent messages
         recent = self.messages[-max_messages:] if len(self.messages) > max_messages else self.messages
@@ -60,12 +60,12 @@ class Session:
         while i < len(recent):
             msg = recent[i]
             role = msg["role"]
-            content = msg["content"]
+            content = msg.get("content", "")
 
             # Check if next message is a system tool call summary
             if role == "assistant" and i + 1 < len(recent):
                 next_msg = recent[i + 1]
-                if next_msg["role"] == "system" and next_msg["content"].startswith("Tool calls:"):
+                if next_msg["role"] == "system" and next_msg.get("content", "").startswith("Tool calls:"):
                     # Merge tool call summary into assistant message
                     content = f"{content}\n\n{next_msg['content']}"
                     i += 1  # Skip the system message
@@ -75,7 +75,12 @@ class Session:
                 i += 1
                 continue
 
-            result.append({"role": role, "content": content})
+            entry: dict[str, Any] = {"role": role, "content": content}
+            # Preserve tool metadata
+            for k in ("tool_calls", "tool_call_id", "name"):
+                if k in msg:
+                    entry[k] = msg[k]
+            result.append(entry)
             i += 1
 
         return result
@@ -96,13 +101,19 @@ class SessionManager:
 
     def __init__(self, workspace: Path):
         self.workspace = workspace
-        self.sessions_dir = ensure_dir(Path.home() / ".nanobot" / "sessions")
+        self.sessions_dir = ensure_dir(self.workspace / "sessions")
+        self.legacy_sessions_dir = Path.home() / ".nanobot" / "sessions"
         self._cache: dict[str, Session] = {}
     
     def _get_session_path(self, key: str) -> Path:
         """Get the file path for a session."""
         safe_key = safe_filename(key.replace(":", "_"))
         return self.sessions_dir / f"{safe_key}.jsonl"
+
+    def _get_legacy_session_path(self, key: str) -> Path:
+        """Legacy global session path (~/.nanobot/sessions/)."""
+        safe_key = safe_filename(key.replace(":", "_"))
+        return self.legacy_sessions_dir / f"{safe_key}.jsonl"
     
     def get_or_create(self, key: str) -> Session:
         """
@@ -127,6 +138,12 @@ class SessionManager:
     def _load(self, key: str) -> Session | None:
         """Load a session from disk."""
         path = self._get_session_path(key)
+        if not path.exists():
+            legacy_path = self._get_legacy_session_path(key)
+            if legacy_path.exists():
+                import shutil
+                shutil.move(str(legacy_path), str(path))
+                logger.info(f"Migrated session {key} from legacy path")
 
         if not path.exists():
             return None

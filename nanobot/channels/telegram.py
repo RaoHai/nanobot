@@ -208,6 +208,18 @@ class TelegramChannel(BaseChannel):
             await self._app.shutdown()
             self._app = None
     
+    @staticmethod
+    def _get_media_type(path: str) -> str:
+        """Guess media type from file extension."""
+        ext = path.rsplit(".", 1)[-1].lower() if "." in path else ""
+        if ext in ("jpg", "jpeg", "png", "gif", "webp"):
+            return "photo"
+        if ext == "ogg":
+            return "voice"
+        if ext in ("mp3", "m4a", "wav", "aac"):
+            return "audio"
+        return "document"
+
     async def send(self, msg: OutboundMessage) -> None:
         """Send a message through Telegram."""
         if not self._app:
@@ -341,24 +353,6 @@ class TelegramChannel(BaseChannel):
                 **reply_kwargs,
             )
         logger.info(f"Sent {len(media_paths)} photo(s) to chat_id={chat_id}")
-
-    @staticmethod
-    def _resolve_reply_to_message_id(msg: OutboundMessage) -> int | None:
-        """
-        Resolve Telegram message ID for quote reply.
-        
-        Only use explicit OutboundMessage.reply_to to avoid automatic quote replies.
-        """
-        if msg.reply_to is None:
-            return None
-        try:
-            resolved = int(msg.reply_to)
-            logger.debug("Resolved explicit Telegram reply target message_id={}", resolved)
-            return resolved
-        except (TypeError, ValueError):
-            logger.debug("Invalid explicit Telegram reply target: {}", msg.reply_to)
-            return None
-
     async def _on_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /start command."""
         if not update.message or not update.effective_user:
