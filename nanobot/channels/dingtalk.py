@@ -191,6 +191,16 @@ class DingTalkChannel(BaseChannel):
 
     async def send(self, msg: OutboundMessage) -> None:
         """Send a message through DingTalk."""
+        # Progress message: DingTalk has no typing indicator, just ignore
+        if msg.msg_type == "progress":
+            logger.debug(f"Progress message for chat_id={msg.chat_id}, ignoring (DingTalk has no typing indicator)")
+            return
+
+        # Silent message: don't send anything
+        if msg.msg_type == "silent":
+            logger.debug(f"Silent message for chat_id={msg.chat_id}, skipping send")
+            return
+
         token = await self._get_access_token()
         if not token:
             return

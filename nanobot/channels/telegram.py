@@ -226,13 +226,21 @@ class TelegramChannel(BaseChannel):
             logger.warning("Telegram bot not running")
             return
 
+        # Progress message: send typing indicator instead of actual message
+        if msg.msg_type == "progress":
+            logger.debug(f"Progress message for chat_id={msg.chat_id}, sending typing indicator")
+            try:
+                chat_id = int(msg.chat_id)
+                await self._app.bot.send_chat_action(chat_id=chat_id, action="typing")
+            except Exception as e:
+                logger.debug(f"Failed to send typing indicator: {e}")
+            return
+
         # Stop typing indicator for this chat
         self._stop_typing(msg.chat_id)
 
         # Silent message: only stop typing, don't send anything
-        # Check both the silent flag and content markers
-        silent_markers = ["[NO_RESPONSE]", "[SILENT]", "[SKIP]"]
-        if msg.silent or any(marker in msg.content for marker in silent_markers):
+        if msg.msg_type == "silent":
             logger.debug(f"Silent message for chat_id={msg.chat_id}, skipping send")
             return
 
