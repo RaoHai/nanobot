@@ -341,9 +341,13 @@ class AgentLoop:
         )
 
         async def _bus_progress(content: str) -> None:
+            progress_metadata = dict(msg.metadata) if msg.metadata else {}
+            progress_metadata["message_type"] = "progress"
+            progress_metadata["progress_notice"] = True
             await self.bus.publish_outbound(OutboundMessage(
                 channel=msg.channel, chat_id=msg.chat_id, content=content,
-                metadata=msg.metadata or {},
+                metadata=progress_metadata,
+                msg_type="progress",
             ))
 
         final_content, tools_used = await self._run_agent_loop(
@@ -363,11 +367,12 @@ class AgentLoop:
             session.add_message("assistant", f"(silent: {final_content})",
                                 tools_used=tools_used if tools_used else None)
             self.sessions.save(session)
-            # Pass to channel - channel layer will filter based on markers
+            # Pass to channel with silent msg_type - channel layer will skip sending
             return OutboundMessage(
                 channel=msg.channel,
                 chat_id=msg.chat_id,
-                content=final_content,  # Pass original content, let channel filter
+                content=final_content,
+                msg_type="silent",
             )
 
         preview = final_content[:120] + "..." if len(final_content) > 120 else final_content
