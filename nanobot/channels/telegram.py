@@ -287,6 +287,13 @@ class TelegramChannel(BaseChannel):
         # Split message if too long
         chunks = _split_message(content)
 
+        reply_params = None
+        if reply_to_message_id is not None:
+            reply_params = ReplyParameters(
+                message_id=reply_to_message_id,
+                allow_sending_without_reply=True
+            )
+
         for i, chunk in enumerate(chunks):
             html_content = _markdown_to_telegram_html(chunk)
             send_kwargs: dict = {
@@ -295,18 +302,16 @@ class TelegramChannel(BaseChannel):
                 "parse_mode": "HTML",
             }
             # Only reply to the first chunk
-            if i == 0 and reply_to_message_id is not None:
-                send_kwargs["reply_to_message_id"] = reply_to_message_id
-                send_kwargs["allow_sending_without_reply"] = True
+            if i == 0 and reply_params is not None:
+                send_kwargs["reply_parameters"] = reply_params
             try:
                 await self._app.bot.send_message(**send_kwargs)
             except Exception:
                 # Fallback to plain text if HTML parsing fails
                 logger.warning("HTML parse failed, falling back to plain text")
                 fallback_kwargs: dict = {"chat_id": chat_id, "text": chunk}
-                if i == 0 and reply_to_message_id is not None:
-                    fallback_kwargs["reply_to_message_id"] = reply_to_message_id
-                    fallback_kwargs["allow_sending_without_reply"] = True
+                if i == 0 and reply_params is not None:
+                    fallback_kwargs["reply_parameters"] = reply_params
                 await self._app.bot.send_message(**fallback_kwargs)
 
     async def _send_reaction(self, chat_id: int, message_id: int, emoji: str) -> None:
@@ -328,8 +333,10 @@ class TelegramChannel(BaseChannel):
             "sticker": sticker_file_id,
         }
         if reply_to_message_id is not None:
-            send_kwargs["reply_to_message_id"] = reply_to_message_id
-            send_kwargs["allow_sending_without_reply"] = True
+            send_kwargs["reply_parameters"] = ReplyParameters(
+                message_id=reply_to_message_id,
+                allow_sending_without_reply=True
+            )
         await self._app.bot.send_sticker(**send_kwargs)
         logger.info(f"Sent sticker to chat_id={chat_id}")
 
@@ -338,8 +345,10 @@ class TelegramChannel(BaseChannel):
         html_caption = _markdown_to_telegram_html(content) if content else None
         reply_kwargs: dict = {}
         if reply_to_message_id is not None:
-            reply_kwargs["reply_to_message_id"] = reply_to_message_id
-            reply_kwargs["allow_sending_without_reply"] = True
+            reply_kwargs["reply_parameters"] = ReplyParameters(
+                message_id=reply_to_message_id,
+                allow_sending_without_reply=True
+            )
 
         if len(media_paths) == 1:
             # Single photo
