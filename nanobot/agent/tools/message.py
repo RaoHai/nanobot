@@ -1,7 +1,6 @@
 """Message tool for sending messages to users."""
 
-from pathlib import Path
-from typing import Any, Callable, Awaitable
+from typing import Any, Awaitable, Callable
 
 from nanobot.agent.tools.base import Tool
 from nanobot.bus.events import OutboundMessage
@@ -9,46 +8,41 @@ from nanobot.bus.events import OutboundMessage
 
 class MessageTool(Tool):
     """Tool to send messages to users on chat channels."""
-    
+
     def __init__(
         self,
         send_callback: Callable[[OutboundMessage], Awaitable[None]] | None = None,
         default_channel: str = "",
         default_chat_id: str = "",
-        default_metadata: dict[str, Any] | None = None,
+        default_message_id: str | None = None,
     ):
         self._send_callback = send_callback
         self._default_channel = default_channel
         self._default_chat_id = default_chat_id
-        self._default_metadata: dict[str, Any] = default_metadata or {}
+        self._default_message_id = default_message_id
+        self._sent_in_turn: bool = False
 
-    def set_context(self, channel: str, chat_id: str, message_id: str | None = None, metadata: dict[str, Any] | None = None) -> None:
+    def set_context(self, channel: str, chat_id: str, message_id: str | None = None) -> None:
         """Set the current message context."""
         self._default_channel = channel
         self._default_chat_id = chat_id
-        if message_id:
-            self._default_metadata["message_id"] = message_id
-        if metadata:
-            self._default_metadata.update(metadata)
-    
+        self._default_message_id = message_id
+
     def set_send_callback(self, callback: Callable[[OutboundMessage], Awaitable[None]]) -> None:
         """Set the callback for sending messages."""
         self._send_callback = callback
-    
+
+    def start_turn(self) -> None:
+        """Reset per-turn send tracking."""
+        self._sent_in_turn = False
+
     @property
     def name(self) -> str:
         return "message"
-    
+
     @property
     def description(self) -> str:
-        return (
-            "Send a message to the user. Use this when you want to communicate something. "
-            "You can optionally attach images by providing local file paths in the media parameter. "
-            "For Telegram, you can send a sticker by setting send_sticker to a file_id string, or true to use the last received sticker.\n\n"
-            "IMPORTANT USAGE RULES:\n"
-            "1. For simple text replies, just output text directly - DO NOT use this tool! Only use this tool when you need sticker/reaction/media/specific chat_id.\n"
-            "2. When sending sticker or reaction, content MUST be empty string ''! Do not write '[SILENT]' or any text."
-        )
+        return "Send a message to the user. Use this when you want to communicate something."
 
     @property
     def parameters(self) -> dict[str, Any]:
@@ -71,21 +65,6 @@ class MessageTool(Tool):
                     "type": "array",
                     "items": {"type": "string"},
                     "description": "Optional: list of file paths to attach (images, audio, documents)"
-                },
-                "send_sticker": {
-                    "anyOf": [
-                        {"type": "boolean"},
-                        {"type": "string"}
-                    ],
-                    "description": "Optional: if true, send the last received sticker; if a string, send the sticker with that file_id (Telegram only)"
-                },
-                "reaction": {
-                    "type": "string",
-                    "description": "Optional: emoji reaction to add to a message (e.g., '👍', '❤️', '🔥'). Telegram only."
-                },
-                "message_id": {
-                    "type": "integer",
-                    "description": "Optional: target message ID for reaction. If not provided, reacts to the last received message."
                 }
             },
             "required": ["content"]
@@ -96,15 +75,13 @@ class MessageTool(Tool):
         content: str,
         channel: str | None = None,
         chat_id: str | None = None,
+        message_id: str | None = None,
         media: list[str] | None = None,
-        send_sticker: bool | str = False,
-        reaction: str | None = None,
-        message_id: int | None = None,
         **kwargs: Any
     ) -> str:
         channel = channel or self._default_channel
         chat_id = chat_id or self._default_chat_id
-        message_id = message_id or self._default_metadata.get("message_id")
+        message_id = message_id or self._default_message_id
 
         if not channel or not chat_id:
             return "Error: No target channel/chat specified"
@@ -112,49 +89,20 @@ class MessageTool(Tool):
         if not self._send_callback:
             return "Error: Message sending not configured"
 
-        # Prepare metadata - include sticker_file_id if send_sticker is set
-        metadata = dict(self._default_metadata)
-        
-        # If reaction is specified, determine target message_id
-        if reaction:
-            if message_id:
-                # Use explicitly provided message_id
-                metadata["reaction_to_message_id"] = message_id
-            elif "message_id" in metadata:
-                # Fall back to last received message
-                metadata["reaction_to_message_id"] = metadata["message_id"]
-        
-        if send_sticker:
-            if isinstance(send_sticker, str):
-                # Use the provided file_id
-                metadata["sticker_file_id"] = send_sticker
-            elif "sticker_file_id" in self._default_metadata:
-                # Use the last received sticker
-                pass
-            else:
-                return "Error: No sticker available to send"
-        else:
-            # Remove sticker_file_id if not sending sticker
-            metadata.pop("sticker_file_id", None)
-
         msg = OutboundMessage(
             channel=channel,
             chat_id=chat_id,
             content=content,
-            media=[str(Path(p).expanduser()) for p in media] if media else [],
-            metadata=metadata,
-            reaction=reaction,
+            media=media or [],
+            metadata={
+                "message_id": message_id,
+            }
         )
 
         try:
             await self._send_callback(msg)
-            parts = [f"Message sent to {channel}:{chat_id}"]
-            if reaction:
-                parts.append(f" (reacted with {reaction})")
-            elif send_sticker:
-                parts.append(" (sticker)")
-            elif media:
-                parts.append(f" with {len(media)} attachment(s)")
-            return "".join(parts)
+            self._sent_in_turn = True
+            media_info = f" with {len(media)} attachments" if media else ""
+            return f"Message sent to {channel}:{chat_id}{media_info}"
         except Exception as e:
             return f"Error sending message: {str(e)}"
