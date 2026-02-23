@@ -88,6 +88,8 @@ class LLMProvider(ABC):
         model: str | None = None,
         max_tokens: int = 4096,
         temperature: float = 0.7,
+        effort: str | None = None,
+        thinking: dict | None = None,
     ) -> LLMResponse:
         """
         Send a chat completion request.
