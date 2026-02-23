@@ -376,7 +376,6 @@ def gateway(
         restrict_to_workspace=config.tools.restrict_to_workspace,
         session_manager=session_manager,
         mcp_servers=config.tools.mcp_servers,
-        effort=config.agents.defaults.effort,
         thinking=thinking_config,
     )
     
@@ -513,7 +512,6 @@ def agent(
         cron_service=cron,
         restrict_to_workspace=config.tools.restrict_to_workspace,
         mcp_servers=config.tools.mcp_servers,
-        effort=config.agents.defaults.effort,
         thinking=thinking_config,
     )
     
