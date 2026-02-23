@@ -200,7 +200,7 @@ class LiteLLMProvider(LLMProvider):
         
         kwargs: dict[str, Any] = {
             "model": model,
-            "messages": self._sanitize_messages(messages),
+            "messages": self._sanitize_messages(self._sanitize_empty_content(messages)),
             "max_tokens": max_tokens,
             "temperature": temperature,
         }
@@ -284,7 +284,7 @@ class LiteLLMProvider(LLMProvider):
                     f"🐕 Cache: create={cache_create}, read={cache_read}, hit_rate={hit_rate:.1f}%"
                 )
         
-        reasoning_content = getattr(message, "reasoning_content", None)
+        reasoning_content = getattr(message, "reasoning_content", None) or None
         
         return LLMResponse(
             content=message.content,
