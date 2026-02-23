@@ -60,6 +60,8 @@ class AgentLoop:
         session_manager: SessionManager | None = None,
         mcp_servers: dict | None = None,
         channels_config: ChannelsConfig | None = None,
+        effort: str | None = None,
+        thinking: dict | None = None,
     ):
         from nanobot.config.schema import ExecToolConfig
         self.bus = bus
@@ -75,6 +77,8 @@ class AgentLoop:
         self.exec_config = exec_config or ExecToolConfig()
         self.cron_service = cron_service
         self.restrict_to_workspace = restrict_to_workspace
+        self.effort = effort
+        self.thinking = thinking
 
         self.context = ContextBuilder(workspace)
         self.sessions = session_manager or SessionManager(workspace)
@@ -191,6 +195,8 @@ class AgentLoop:
                 model=self.model,
                 temperature=self.temperature,
                 max_tokens=self.max_tokens,
+                effort=self.effort,
+                thinking=self.thinking,
             )
 
             if response.has_tool_calls:
