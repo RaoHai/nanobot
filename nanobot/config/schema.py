@@ -168,7 +168,6 @@ class AgentDefaults(BaseModel):
     temperature: float = 0.7
     max_tool_iterations: int = 50
     # Anthropic-specific parameters
-    effort: str | None = None  # "low", "medium", "high", "max" (Claude 4.5+ only)
     thinking: ThinkingConfig = Field(default_factory=ThinkingConfig)  # Extended thinking
 
 

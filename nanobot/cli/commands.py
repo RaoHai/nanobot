@@ -337,7 +337,6 @@ def gateway(
         cron_service=cron,
         restrict_to_workspace=config.tools.restrict_to_workspace,
         session_manager=session_manager,
-        effort=config.agents.defaults.effort,
         thinking=thinking_config,
     )
     
@@ -460,7 +459,6 @@ def agent(
         brave_api_key=config.tools.web.search.api_key or None,
         exec_config=config.tools.exec,
         restrict_to_workspace=config.tools.restrict_to_workspace,
-        effort=config.agents.defaults.effort,
         thinking=thinking_config,
     )
     

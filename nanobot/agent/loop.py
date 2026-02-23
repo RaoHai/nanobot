@@ -46,7 +46,6 @@ class AgentLoop:
         cron_service: "CronService | None" = None,
         restrict_to_workspace: bool = False,
         session_manager: SessionManager | None = None,
-        effort: str | None = None,
         thinking: dict[str, Any] | None = None,
     ):
         from nanobot.config.schema import ExecToolConfig
@@ -60,7 +59,6 @@ class AgentLoop:
         self.exec_config = exec_config or ExecToolConfig()
         self.cron_service = cron_service
         self.restrict_to_workspace = restrict_to_workspace
-        self.effort = effort
         self.thinking = thinking
 
         self.context = ContextBuilder(workspace)
@@ -201,7 +199,6 @@ class AgentLoop:
                 messages=messages,
                 tools=self.tools.get_definitions(),
                 model=self.model,
-                effort=self.effort,
                 thinking=self.thinking,
             )
 
@@ -349,7 +346,6 @@ class AgentLoop:
                 messages=messages,
                 tools=self.tools.get_definitions(),
                 model=self.model,
-                effort=self.effort,
                 thinking=self.thinking,
             )
 
