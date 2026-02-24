@@ -7,6 +7,7 @@ from typing import Any
 
 import litellm
 from litellm import acompletion
+from loguru import logger
 
 from nanobot.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from nanobot.providers.registry import find_by_model, find_gateway
@@ -233,9 +234,29 @@ class LiteLLMProvider(LLMProvider):
             kwargs["tool_choice"] = "auto"
         
         try:
+            logger.debug(
+                "LLM request: model={} messages={} tools={}",
+                model,
+                len(kwargs["messages"]),
+                len(tools) if tools else 0,
+            )
+            for i, m in enumerate(kwargs["messages"]):
+                role = m.get("role", "?")
+                content = str(m.get("content") or "")[:200]
+                tc = f" [tool_calls:{len(m['tool_calls'])}]" if m.get("tool_calls") else ""
+                tcid = f" [tool_call_id:{m['tool_call_id']}]" if m.get("tool_call_id") else ""
+                logger.debug("  msg[{}] role={}{}{} | {}", i, role, tc, tcid, content)
             response = await acompletion(**kwargs)
-            return self._parse_response(response)
+            parsed = self._parse_response(response)
+            logger.debug(
+                "LLM response: finish={} has_tool_calls={} content={}",
+                parsed.finish_reason,
+                parsed.has_tool_calls,
+                str(parsed.content or "")[:200],
+            )
+            return parsed
         except Exception as e:
+            logger.error("LLM error: {}", e)
             # Return error as content for graceful handling
             return LLMResponse(
                 content=f"Error calling LLM: {str(e)}",

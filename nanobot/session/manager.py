@@ -20,8 +20,7 @@ class Session:
     Stores messages in JSONL format for easy reading and persistence.
 
     Important: Messages are append-only for LLM cache efficiency.
-    The consolidation process writes summaries to MEMORY.md/HISTORY.md
-    but does NOT modify the messages list or get_history() output.
+    The last_consolidated pointer tracks how far the sliding window has advanced.
     """
 
     key: str  # channel:chat_id
@@ -29,8 +28,8 @@ class Session:
     created_at: datetime = field(default_factory=datetime.now)
     updated_at: datetime = field(default_factory=datetime.now)
     metadata: dict[str, Any] = field(default_factory=dict)
-    last_consolidated: int = 0  # Number of messages already consolidated to files
-    
+    last_consolidated: int = 0  # Messages before this index are outside the active window
+
     def add_message(self, role: str, content: str, **kwargs: Any) -> None:
         """Add a message to the session."""
         msg = {
@@ -42,49 +41,43 @@ class Session:
         self.messages.append(msg)
         self.updated_at = datetime.now()
 
-    def get_history(self, max_messages: int = 500) -> list[dict[str, Any]]:
-        """
-        Get message history for LLM context.
+    def get_history(self, max_messages: int = 500, max_age_hours: float = 24.0) -> list[dict[str, Any]]:
+        """Return unconsolidated messages for LLM input, aligned to a user turn."""
+        from datetime import timezone
+        unconsolidated = self.messages[self.last_consolidated:]
 
-        Args:
-            max_messages: Maximum messages to return.
+        # Filter by age: drop messages older than max_age_hours
+        if max_age_hours > 0:
+            cutoff = datetime.now(timezone.utc) - __import__('datetime').timedelta(hours=max_age_hours)
+            # Cutoff as naive for comparison (timestamps stored without tz)
+            cutoff_naive = cutoff.replace(tzinfo=None)
+            fresh = []
+            for m in unconsolidated:
+                ts_str = m.get("timestamp", "")
+                try:
+                    ts = datetime.fromisoformat(ts_str)
+                    if ts >= cutoff_naive:
+                        fresh.append(m)
+                except (ValueError, TypeError):
+                    fresh.append(m)  # no timestamp → keep
+            unconsolidated = fresh
 
-        Returns:
-            List of messages in LLM format, preserving tool metadata.
-        """
-        # Get recent messages
-        recent = self.messages[-max_messages:] if len(self.messages) > max_messages else self.messages
+        sliced = unconsolidated[-max_messages:]
 
-        # Convert to LLM format, merging tool call summaries into assistant messages
-        result = []
-        i = 0
-        while i < len(recent):
-            msg = recent[i]
-            role = msg["role"]
-            content = msg.get("content", "")
+        # Drop leading non-user messages to avoid orphaned tool_result blocks
+        for i, m in enumerate(sliced):
+            if m.get("role") == "user":
+                sliced = sliced[i:]
+                break
 
-            # Check if next message is a system tool call summary
-            if role == "assistant" and i + 1 < len(recent):
-                next_msg = recent[i + 1]
-                if next_msg["role"] == "system" and next_msg.get("content", "").startswith("Tool calls:"):
-                    # Merge tool call summary into assistant message
-                    content = f"{content}\n\n{next_msg['content']}"
-                    i += 1  # Skip the system message
-
-            # Skip standalone system tool call messages (already merged or orphaned)
-            if role == "system" and content.startswith("Tool calls:"):
-                i += 1
-                continue
-
-            entry: dict[str, Any] = {"role": role, "content": content}
-            # Preserve tool metadata
+        out: list[dict[str, Any]] = []
+        for m in sliced:
+            entry: dict[str, Any] = {"role": m["role"], "content": m.get("content", "")}
             for k in ("tool_calls", "tool_call_id", "name"):
-                if k in msg:
-                    entry[k] = msg[k]
-            result.append(entry)
-            i += 1
-
-        return result
+                if k in m:
+                    entry[k] = m[k]
+            out.append(entry)
+        return out
 
     def clear(self) -> None:
         """Clear all messages and reset session to initial state."""
@@ -105,7 +98,7 @@ class SessionManager:
         self.sessions_dir = ensure_dir(self.workspace / "sessions")
         self.legacy_sessions_dir = Path.home() / ".nanobot" / "sessions"
         self._cache: dict[str, Session] = {}
-    
+
     def _get_session_path(self, key: str) -> Path:
         """Get the file path for a session."""
         safe_key = safe_filename(key.replace(":", "_"))
@@ -115,27 +108,27 @@ class SessionManager:
         """Legacy global session path (~/.nanobot/sessions/)."""
         safe_key = safe_filename(key.replace(":", "_"))
         return self.legacy_sessions_dir / f"{safe_key}.jsonl"
-    
+
     def get_or_create(self, key: str) -> Session:
         """
         Get an existing session or create a new one.
-        
+
         Args:
             key: Session key (usually channel:chat_id).
-        
+
         Returns:
             The session.
         """
         if key in self._cache:
             return self._cache[key]
-        
+
         session = self._load(key)
         if session is None:
             session = Session(key=key)
-        
+
         self._cache[key] = session
         return session
-    
+
     def _load(self, key: str) -> Session | None:
         """Load a session from disk."""
         path = self._get_session_path(key)
@@ -182,7 +175,7 @@ class SessionManager:
         except Exception as e:
             logger.warning("Failed to load session {}: {}", key, e)
             return None
-    
+
     def save(self, session: Session) -> None:
         """Save a session to disk."""
         path = self._get_session_path(session.key)
@@ -201,20 +194,20 @@ class SessionManager:
                 f.write(json.dumps(msg, ensure_ascii=False) + "\n")
 
         self._cache[session.key] = session
-    
+
     def invalidate(self, key: str) -> None:
         """Remove a session from the in-memory cache."""
         self._cache.pop(key, None)
-    
+
     def list_sessions(self) -> list[dict[str, Any]]:
         """
         List all sessions.
-        
+
         Returns:
             List of session info dicts.
         """
         sessions = []
-        
+
         for path in self.sessions_dir.glob("*.jsonl"):
             try:
                 # Read just the metadata line
@@ -232,5 +225,5 @@ class SessionManager:
                             })
             except Exception:
                 continue
-        
+
         return sorted(sessions, key=lambda x: x.get("updated_at", ""), reverse=True)

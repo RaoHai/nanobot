@@ -52,6 +52,7 @@ class AgentLoop:
         temperature: float = 0.1,
         max_tokens: int = 4096,
         memory_window: int = 100,
+        history_max_age_hours: float = 24.0,
         brave_api_key: str | None = None,
         exec_config: ExecToolConfig | None = None,
         cron_service: CronService | None = None,
@@ -72,6 +73,7 @@ class AgentLoop:
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.memory_window = memory_window
+        self.history_max_age_hours = history_max_age_hours
         self.brave_api_key = brave_api_key
         self.exec_config = exec_config or ExecToolConfig()
         self.cron_service = cron_service
@@ -228,6 +230,10 @@ class AgentLoop:
                     )
             else:
                 final_content = self._strip_think(response.content)
+                messages = self.context.add_assistant_message(
+                    messages, response.content,
+                    reasoning_content=response.reasoning_content,
+                )
                 break
 
         if final_content is None and iteration >= self.max_iterations:
@@ -300,7 +306,7 @@ class AgentLoop:
             key = f"{channel}:{chat_id}"
             session = self.sessions.get_or_create(key)
             self._set_tool_context(channel, chat_id, msg.metadata.get("message_id"))
-            history = session.get_history(max_messages=self.memory_window)
+            history = session.get_history(max_messages=self.memory_window, max_age_hours=self.history_max_age_hours)
             messages = self.context.build_messages(
                 history=history,
                 current_message=msg.content, channel=channel, chat_id=chat_id,
@@ -319,13 +325,14 @@ class AgentLoop:
 
         # Slash commands
         cmd = msg.content.strip().lower()
-        if cmd == "/new":
+        cmd_base = cmd.split("@")[0]  # Handle /cmd@botname from Telegram groups
+        if cmd_base == "/new":
             session.clear()
             self.sessions.save(session)
             self.sessions.invalidate(session.key)
             return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id,
                                   content="New session started.")
-        if cmd == "/help":
+        if cmd_base == "/help":
             return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id,
                                   content="🐈 nanobot commands:\n/new — Start a new conversation\n/help — Show available commands")
 
@@ -334,7 +341,7 @@ class AgentLoop:
             if isinstance(message_tool, MessageTool):
                 message_tool.start_turn()
 
-        history = session.get_history(max_messages=self.memory_window)
+        history = session.get_history(max_messages=self.memory_window, max_age_hours=self.history_max_age_hours)
         initial_messages = self.context.build_messages(
             history=history,
             current_message=msg.content,
@@ -348,7 +355,6 @@ class AgentLoop:
             meta["_tool_hint"] = tool_hint
             await self.bus.publish_outbound(OutboundMessage(
                 channel=msg.channel, chat_id=msg.chat_id, content=content, metadata=meta,
-                msg_type="progress",
             ))
 
         final_content, _, all_msgs = await self._run_agent_loop(
@@ -367,6 +373,14 @@ class AgentLoop:
         if message_tool := self.tools.get("message"):
             if isinstance(message_tool, MessageTool) and message_tool._sent_in_turn:
                 return None
+
+        # Handle [SILENT] marker: don't send message, only stop typing
+        if final_content.strip() == "[SILENT]":
+            return OutboundMessage(
+                channel=msg.channel, chat_id=msg.chat_id, content="",
+                metadata=msg.metadata or {},
+                msg_type="silent",
+            )
 
         return OutboundMessage(
             channel=msg.channel, chat_id=msg.chat_id, content=final_content,
@@ -387,6 +401,11 @@ class AgentLoop:
             entry.setdefault("timestamp", datetime.now().isoformat())
             session.messages.append(entry)
         session.updated_at = datetime.now()
+
+        # Advance last_consolidated to keep the unconsolidated window bounded
+        unconsolidated = len(session.messages) - session.last_consolidated
+        if unconsolidated > self.memory_window:
+            session.last_consolidated = len(session.messages) - self.memory_window
 
     async def process_direct(
         self,
