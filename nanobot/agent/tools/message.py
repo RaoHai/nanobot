@@ -61,6 +61,14 @@ class MessageTool(Tool):
                     "type": "string",
                     "description": "Optional: target chat/user ID"
                 },
+                "message_id": {
+                    "type": "string",
+                    "description": "Optional: message ID to react to (required when sending a reaction)"
+                },
+                "reaction": {
+                    "type": "string",
+                    "description": "Optional: emoji reaction to add to a message (requires message_id). E.g. '👍', '❤️', '🔥'"
+                },
                 "media": {
                     "type": "array",
                     "items": {"type": "string"},
@@ -76,6 +84,7 @@ class MessageTool(Tool):
         channel: str | None = None,
         chat_id: str | None = None,
         message_id: str | None = None,
+        reaction: str | None = None,
         media: list[str] | None = None,
         **kwargs: Any
     ) -> str:
@@ -89,14 +98,17 @@ class MessageTool(Tool):
         if not self._send_callback:
             return "Error: Message sending not configured"
 
+        metadata: dict[str, Any] = {"message_id": message_id}
+        if reaction and message_id:
+            metadata["reaction_to_message_id"] = message_id
+
         msg = OutboundMessage(
             channel=channel,
             chat_id=chat_id,
             content=content,
             media=media or [],
-            metadata={
-                "message_id": message_id,
-            }
+            reaction=reaction,
+            metadata=metadata,
         )
 
         try:
