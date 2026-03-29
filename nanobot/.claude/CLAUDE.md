@@ -2,7 +2,7 @@
 
 > 用于追踪本地 origin/main 相对于上游 hk (HKUDS/nanobot) 的独有功能，方便后续合并冲突时判断取舍。
 >
-> 最后更新：2026-02-25，基于 merge commit `2bed323`
+> 最后更新：2026-03-29，基于 merge commit `36fca50`
 
 ---
 
