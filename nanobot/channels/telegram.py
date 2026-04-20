@@ -5,9 +5,10 @@ from __future__ import annotations
 import asyncio
 import re
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
+from pydantic import Field
 from telegram import BotCommand, InputMediaPhoto, ReactionTypeEmoji, Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from telegram.request import HTTPXRequest
@@ -15,7 +16,17 @@ from telegram.request import HTTPXRequest
 from nanobot.bus.events import OutboundMessage
 from nanobot.bus.queue import MessageBus
 from nanobot.channels.base import BaseChannel
-from nanobot.config.schema import TelegramConfig
+from nanobot.config.schema import Base
+
+
+class TelegramConfig(Base):
+    """Telegram channel configuration."""
+
+    enabled: bool = False
+    token: str = ""  # Bot token from @BotFather
+    allow_from: list[str] = Field(default_factory=list)  # Allowed user IDs or usernames
+    proxy: str | None = None  # HTTP/SOCKS5 proxy URL, e.g. "http://127.0.0.1:7890"
+    reply_to_message: bool = False  # If true, bot replies quote the original message
 
 if TYPE_CHECKING:
     from nanobot.session.manager import SessionManager
@@ -122,13 +133,19 @@ class TelegramChannel(BaseChannel):
         BotCommand("help", "Show available commands"),
     ]
     
+    @classmethod
+    def default_config(cls) -> dict[str, Any]:
+        return TelegramConfig().model_dump(by_alias=True)
+
     def __init__(
         self,
-        config: TelegramConfig,
+        config: Any,
         bus: MessageBus,
         groq_api_key: str = "",
         session_manager: "SessionManager | None" = None,
     ):
+        if isinstance(config, dict):
+            config = TelegramConfig.model_validate(config)
         super().__init__(config, bus)
         self.config: TelegramConfig = config
         self.groq_api_key = groq_api_key

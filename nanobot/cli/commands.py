@@ -684,10 +684,21 @@ def gateway(
 
     console.print(f"[green]✓[/green] Heartbeat: every {hb_cfg.interval_s}s")
 
+    # Create API server with bus for message injection
+    from nanobot.api.server import StatusServer
+    api_server = StatusServer(
+        host=config.gateway.host,
+        port=config.gateway.port,
+        log_dir=config.workspace_path / "logs",
+        bus=bus,
+    )
+    console.print(f"[green]✓[/green] API server: http://{config.gateway.host}:{port} (POST /api/inject)")
+
     async def run():
         try:
             await cron.start()
             await heartbeat.start()
+            await api_server.start()
             await asyncio.gather(
                 agent.run(),
                 channels.start_all(),
@@ -699,6 +710,7 @@ def gateway(
             console.print("\n[red]Error: Gateway crashed unexpectedly[/red]")
             console.print(traceback.format_exc())
         finally:
+            await api_server.stop()
             await agent.close_mcp()
             heartbeat.stop()
             cron.stop()
