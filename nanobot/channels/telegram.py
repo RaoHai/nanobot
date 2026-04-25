@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import mimetypes
 import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 from pydantic import Field
-from telegram import BotCommand, InputMediaPhoto, ReactionTypeEmoji, Update
+from telegram import BotCommand, InputMediaAnimation, InputMediaDocument, InputMediaPhoto, InputMediaVideo, ReactionTypeEmoji, Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from telegram.request import HTTPXRequest
 
@@ -374,8 +375,29 @@ class TelegramChannel(BaseChannel):
         await self._app.bot.send_sticker(**send_kwargs)
         logger.info(f"Sent sticker to chat_id={chat_id}")
 
+    @staticmethod
+    def _classify_media(path: str) -> str:
+        """Classify a media file into: photo, animation, video, or document."""
+        ext = Path(path).suffix.lower()
+        if ext == ".gif":
+            return "animation"
+        if ext in (".mp4", ".mov", ".avi", ".mkv", ".webm"):
+            return "video"
+        if ext in (".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tiff"):
+            return "photo"
+        # Fallback: check MIME type
+        mime, _ = mimetypes.guess_type(path)
+        if mime:
+            if mime.startswith("image/gif"):
+                return "animation"
+            if mime.startswith("video/"):
+                return "video"
+            if mime.startswith("image/"):
+                return "photo"
+        return "document"
+
     async def _send_with_media(self, chat_id: int, content: str, media_paths: list[str], reply_to_message_id: int | None) -> None:
-        """Send message with photo(s)."""
+        """Send message with media file(s), choosing the correct Telegram API by file type."""
         html_caption = _markdown_to_telegram_html(content) if content else None
         reply_kwargs: dict = {}
         if reply_to_message_id is not None:
@@ -383,34 +405,58 @@ class TelegramChannel(BaseChannel):
                 message_id=reply_to_message_id,
                 allow_sending_without_reply=True
             )
+        caption_kwargs: dict = {}
+        if html_caption:
+            caption_kwargs = {"caption": html_caption, "parse_mode": "HTML"}
 
         if len(media_paths) == 1:
-            # Single photo
-            with open(media_paths[0], "rb") as f:
-                await self._app.bot.send_photo(
-                    chat_id=chat_id,
-                    photo=f,
-                    caption=html_caption,
-                    parse_mode="HTML" if html_caption else None,
-                    **reply_kwargs,
-                )
+            path = media_paths[0]
+            media_type = self._classify_media(path)
+            with open(path, "rb") as f:
+                if media_type == "animation":
+                    await self._app.bot.send_animation(
+                        chat_id=chat_id, animation=f,
+                        **caption_kwargs, **reply_kwargs,
+                    )
+                elif media_type == "video":
+                    await self._app.bot.send_video(
+                        chat_id=chat_id, video=f,
+                        **caption_kwargs, **reply_kwargs,
+                    )
+                elif media_type == "document":
+                    await self._app.bot.send_document(
+                        chat_id=chat_id, document=f,
+                        **caption_kwargs, **reply_kwargs,
+                    )
+                else:
+                    # Default: photo
+                    await self._app.bot.send_photo(
+                        chat_id=chat_id, photo=f,
+                        **caption_kwargs, **reply_kwargs,
+                    )
+            logger.info(f"Sent {media_type} to chat_id={chat_id}: {path}")
         else:
-            # Multiple photos as media group
+            # Multiple files as media group
             media_group = []
             for i, path in enumerate(media_paths):
-                media_group.append(
-                    InputMediaPhoto(
-                        media=open(path, "rb"),
-                        caption=html_caption if i == 0 else None,
-                        parse_mode="HTML" if (i == 0 and html_caption) else None,
-                    )
-                )
+                media_type = self._classify_media(path)
+                cap = html_caption if i == 0 else None
+                pm = "HTML" if (i == 0 and html_caption) else None
+                fobj = open(path, "rb")  # noqa: SIM115 — closed by telegram lib
+                if media_type == "animation":
+                    media_group.append(InputMediaAnimation(media=fobj, caption=cap, parse_mode=pm))
+                elif media_type == "video":
+                    media_group.append(InputMediaVideo(media=fobj, caption=cap, parse_mode=pm))
+                elif media_type == "document":
+                    media_group.append(InputMediaDocument(media=fobj, caption=cap, parse_mode=pm))
+                else:
+                    media_group.append(InputMediaPhoto(media=fobj, caption=cap, parse_mode=pm))
             await self._app.bot.send_media_group(
                 chat_id=chat_id,
                 media=media_group,
                 **reply_kwargs,
             )
-        logger.info(f"Sent {len(media_paths)} photo(s) to chat_id={chat_id}")
+            logger.info(f"Sent {len(media_paths)} media file(s) to chat_id={chat_id}")
 
     @staticmethod
     def _resolve_reply_to_message_id(msg: OutboundMessage) -> int | None:

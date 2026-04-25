@@ -36,5 +36,6 @@ class OutboundMessage:
     metadata: dict[str, Any] = field(default_factory=dict)
     reaction: str | None = None  # Emoji reaction to add to a message (requires reaction_to_message_id in metadata)
     msg_type: str = "final"  # "final" for normal messages, "progress" for typing indicators, "silent" for no-send
+    buttons: list[list[str]] = field(default_factory=list)
 
 
