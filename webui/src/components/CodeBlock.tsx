@@ -1,22 +1,45 @@
-import { Suspense, lazy, useCallback, useState } from "react";
+import { Suspense, lazy, useCallback, useState, type ReactNode } from "react";
 import { Check, Copy } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { useThemeValue } from "@/hooks/useTheme";
+import { hasAnsi, parseAnsiSegments, stripAnsi } from "@/lib/ansi";
+import { copyTextToClipboard } from "@/lib/clipboard";
+import { normalizeCodeLanguage } from "@/lib/code-language";
 import { cn } from "@/lib/utils";
 
 interface CodeBlockProps {
   language?: string;
   code: string;
   className?: string;
+  chrome?: "default" | "none";
   highlight?: boolean;
+  showLineNumbers?: boolean;
+  wrapLongLines?: boolean;
 }
 
 interface HighlightedCodeProps {
   language?: string;
   code: string;
   isDark: boolean;
+  chrome: "default" | "none";
+  showLineNumbers: boolean;
+  wrapLongLines: boolean;
 }
+
+const CODE_FONT_STACK = [
+  '"JetBrains Mono"',
+  '"SFMono-Regular"',
+  '"SF Mono"',
+  '"Fira Code"',
+  '"Cascadia Code"',
+  '"Source Code Pro"',
+  "Menlo",
+  "Consolas",
+  "monospace",
+].join(", ");
+
+const ANSI_LANGUAGES = new Set(["ansi", "ansi-output"]);
 
 const LazyHighlightedCode = lazy(async () => {
   const [
@@ -30,19 +53,56 @@ const LazyHighlightedCode = lazy(async () => {
   ]);
 
   return {
-    default({ language, code, isDark }: HighlightedCodeProps) {
+    default({
+      language,
+      code,
+      isDark,
+      chrome,
+      showLineNumbers,
+      wrapLongLines,
+    }: HighlightedCodeProps) {
+      const theme = isDark ? oneDark : oneLight;
+      const transparentTheme = chrome === "none" ? {
+        ...theme,
+        'pre[class*="language-"]': {
+          ...theme['pre[class*="language-"]'],
+          background: "transparent",
+        },
+        'code[class*="language-"]': {
+          ...theme['code[class*="language-"]'],
+          background: "transparent",
+        },
+      } : theme;
+
       return (
         <SyntaxHighlighter
           language={language || "text"}
-          style={isDark ? oneDark : oneLight}
+          style={transparentTheme}
           customStyle={{
+            background: "transparent",
             margin: 0,
-            padding: "1rem",
-            fontSize: "0.875rem",
-            lineHeight: 1.6,
+            padding: chrome === "none" ? "0.75rem 1rem" : "1rem 3.5rem 1rem 1.25rem",
+            fontFamily: CODE_FONT_STACK,
+            fontSize: "13px",
+            lineHeight: chrome === "none" ? 1.55 : 1.6,
+            tabSize: 2,
+          }}
+          codeTagProps={{
+            style: {
+              background: "transparent",
+              fontFamily: CODE_FONT_STACK,
+            },
+          }}
+          lineNumberStyle={{
+            minWidth: "2.6em",
+            paddingRight: "1.15rem",
+            color: isDark ? "rgba(212, 212, 216, 0.45)" : "rgba(63, 63, 70, 0.68)",
+            fontFamily: CODE_FONT_STACK,
+            userSelect: "none",
           }}
           PreTag="pre"
-          wrapLongLines
+          showLineNumbers={showLineNumbers}
+          wrapLongLines={wrapLongLines}
         >
           {code}
         </SyntaxHighlighter>
@@ -51,80 +111,157 @@ const LazyHighlightedCode = lazy(async () => {
   };
 });
 
-function PlainCodeFallback({ code }: { code: string }) {
+function renderPlainText(value: string): ReactNode {
+  return value;
+}
+
+function renderAnsiText(value: string): ReactNode {
+  return parseAnsiSegments(value).map((segment, index) => (
+    <span key={index} style={segment.style}>
+      {segment.text}
+    </span>
+  ));
+}
+
+function CodeTextBlock({
+  code,
+  chrome,
+  showLineNumbers,
+  testId,
+  className,
+  renderText = renderPlainText,
+}: {
+  code: string;
+  chrome: "default" | "none";
+  showLineNumbers: boolean;
+  testId: string;
+  className?: string;
+  renderText?: (value: string) => ReactNode;
+}) {
+  const lines = code.split("\n");
   return (
     <pre
-      className="m-0 overflow-x-auto whitespace-pre-wrap bg-background p-4 font-mono text-sm leading-[1.6] text-foreground/90"
-      data-testid="plain-code-fallback"
+      className={cn(
+        "m-0 overflow-x-auto bg-transparent font-mono text-[13px] text-foreground/90",
+        showLineNumbers ? "whitespace-pre" : "whitespace-pre-wrap",
+        chrome === "default"
+          ? "py-4 pl-5 pr-14 leading-[1.6]"
+          : "p-3 leading-[1.55]",
+        className,
+      )}
+      data-testid={testId}
     >
-      <code className="text-inherit">{code}</code>
+      <code className="text-inherit">
+        {showLineNumbers ? (
+          lines.map((line, index) => (
+            <span key={index} className="flex min-w-max">
+              <span className="w-10 shrink-0 select-none pr-4 text-right text-muted-foreground/60">
+                {index + 1}
+              </span>
+              <span className="whitespace-pre">{renderText(line || " ")}</span>
+              {index < lines.length - 1 ? "\n" : null}
+            </span>
+          ))
+        ) : renderText(code)}
+      </code>
     </pre>
   );
+}
+
+function shouldRenderAnsi(language: string | undefined, code: string): boolean {
+  const normalized = language?.trim().toLowerCase();
+  return Boolean((normalized && ANSI_LANGUAGES.has(normalized)) || hasAnsi(code));
 }
 
 export function CodeBlock({
   language,
   code,
   className,
+  chrome = "default",
   highlight = true,
+  showLineNumbers = false,
+  wrapLongLines = true,
 }: CodeBlockProps) {
   const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
   const isDark = useThemeValue() === "dark";
+  const hasChrome = chrome === "default";
+  const renderAnsi = shouldRenderAnsi(language, code);
+  const syntaxLanguage = normalizeCodeLanguage(language);
+  const copyLabel = copied ? t("code.copied") : t("code.copyAria");
 
   const onCopy = useCallback(() => {
-    if (!navigator.clipboard) return;
-    navigator.clipboard.writeText(code).then(() => {
+    void copyTextToClipboard(renderAnsi ? stripAnsi(code) : code).then((ok) => {
+      if (!ok) return;
       setCopied(true);
       setTimeout(() => setCopied(false), 1_500);
     });
-  }, [code]);
+  }, [code, renderAnsi]);
 
   return (
     <div
       className={cn(
-        "overflow-hidden rounded-lg border",
-        isDark ? "border-white/10" : "border-black/10",
+        "not-prose relative overflow-hidden",
+        hasChrome && "rounded-[18px] bg-secondary/70",
         className,
       )}
+      data-language={language || t("code.fallbackLanguage")}
     >
-      <div
-        className={cn(
-          "flex items-center justify-between px-4 py-1.5 text-xs font-medium",
-          isDark
-            ? "bg-zinc-800 text-zinc-300"
-            : "bg-zinc-100 text-zinc-600",
-        )}
-      >
-        <span className="lowercase font-mono">
-          {language || t("code.fallbackLanguage")}
-        </span>
+      {renderAnsi ? (
+        <CodeTextBlock
+          code={code}
+          chrome={chrome}
+          showLineNumbers={showLineNumbers}
+          testId="ansi-code"
+          renderText={renderAnsiText}
+        />
+      ) : highlight ? (
+        <Suspense
+          fallback={
+            <CodeTextBlock
+              code={code}
+              chrome={chrome}
+              showLineNumbers={showLineNumbers}
+              testId="plain-code-fallback"
+            />
+          }
+        >
+          <LazyHighlightedCode
+            language={syntaxLanguage}
+            code={code}
+            isDark={isDark}
+            chrome={chrome}
+            showLineNumbers={showLineNumbers}
+            wrapLongLines={wrapLongLines}
+          />
+        </Suspense>
+      ) : (
+        <CodeTextBlock
+          code={code}
+          chrome={chrome}
+          showLineNumbers={showLineNumbers}
+          testId="plain-code-fallback"
+        />
+      )}
+      {hasChrome ? (
         <button
           type="button"
           onClick={onCopy}
           className={cn(
-            "inline-flex items-center gap-1 rounded px-1.5 py-0.5 font-mono transition-colors",
-            isDark
-              ? "text-zinc-400 hover:bg-zinc-700 hover:text-zinc-200"
-              : "text-zinc-500 hover:bg-zinc-200 hover:text-zinc-700",
+            "absolute right-2.5 top-2.5 z-10 inline-flex h-8 w-8 items-center justify-center rounded-full",
+            "text-muted-foreground/75 transition-colors hover:bg-background/70 hover:text-foreground",
+            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
           )}
-          aria-label={t("code.copyAria")}
+          aria-label={copyLabel}
+          title={copyLabel}
         >
           {copied ? (
-            <Check className="h-3.5 w-3.5" />
+            <Check className="h-4 w-4" aria-hidden />
           ) : (
-            <Copy className="h-3.5 w-3.5" />
+            <Copy className="h-4 w-4" aria-hidden />
           )}
-          <span>{copied ? t("code.copied") : t("code.copy")}</span>
         </button>
-      </div>
-      {highlight ? (
-        <Suspense fallback={<PlainCodeFallback code={code} />}>
-          <LazyHighlightedCode language={language} code={code} isDark={isDark} />
-        </Suspense>
-      ) : (
-        <PlainCodeFallback code={code} />
-      )}
+      ) : null}
     </div>
   );
 }

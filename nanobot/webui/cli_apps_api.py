@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
-from typing import Any
+import time
+from typing import Any, cast
 
 from nanobot.apps.cli import CliAppError, CliAppManager, CliAppsRuntimeConfig
 from nanobot.config.loader import load_config
@@ -19,6 +21,28 @@ _CLI_APP_ATTACHMENT_KEYS = (
     "logo_url",
     "brand_color",
 )
+_CATALOG_REFRESH_RETRY_SECONDS = 60.0
+_catalog_refresh_task: asyncio.Task[None] | None = None
+_catalog_refresh_last_started = 0.0
+
+
+async def _refresh_catalog(manager: CliAppManager) -> None:
+    try:
+        await manager.refresh_catalog_cache(force_refresh=True)
+    except Exception:
+        pass
+
+
+def _start_catalog_refresh(manager: CliAppManager) -> bool:
+    global _catalog_refresh_last_started, _catalog_refresh_task
+    now = time.monotonic()
+    if _catalog_refresh_task is not None and not _catalog_refresh_task.done():
+        return True
+    if now - _catalog_refresh_last_started < _CATALOG_REFRESH_RETRY_SECONDS:
+        return False
+    _catalog_refresh_last_started = now
+    _catalog_refresh_task = asyncio.create_task(_refresh_catalog(manager))
+    return True
 
 
 def _clip_ws_string(value: Any, limit: int = 240) -> str | None:
@@ -34,12 +58,14 @@ def normalize_cli_app_mentions(raw: Any) -> list[dict[str, str]]:
     """Sanitize structured CLI app mentions sent by the WebUI."""
     if not isinstance(raw, list):
         return []
+    raw_items = cast(list[Any], raw)
     out: list[dict[str, str]] = []
     seen: set[str] = set()
-    for item in raw[:8]:
+    for item in raw_items[:8]:
         if not isinstance(item, dict):
             continue
-        name = _clip_ws_string(item.get("name"), 64)
+        app_data = cast(dict[str, Any], item)
+        name = _clip_ws_string(app_data.get("name"), 64)
         if not name or _CLI_APP_NAME_RE.match(name) is None:
             continue
         key = name.lower()
@@ -48,7 +74,10 @@ def normalize_cli_app_mentions(raw: Any) -> list[dict[str, str]]:
         seen.add(key)
         row: dict[str, str] = {"name": key}
         for field in _CLI_APP_ATTACHMENT_KEYS[1:]:
-            value = _clip_ws_string(item.get(field), 512 if field == "logo_url" else 160)
+            value = _clip_ws_string(
+                app_data.get(field),
+                512 if field == "logo_url" else 160,
+            )
             if value:
                 row[field] = value
         out.append(row)
@@ -73,8 +102,20 @@ def _manager() -> CliAppManager:
     )
 
 
-def cli_apps_payload() -> dict[str, Any]:
-    return _manager().payload()
+async def cli_apps_payload(*, installed_only: bool = False) -> dict[str, Any]:
+    manager = _manager()
+    if installed_only:
+        return manager.installed_payload()
+    payload = manager.payload(cache_only=True)
+    refresh_pending = False
+    if not manager.catalog_cache_fresh(include_optional=True):
+        refresh_pending = _start_catalog_refresh(manager)
+    if not payload["apps"]:
+        installed = manager.installed_payload()
+        if installed["apps"]:
+            payload = installed
+    payload["catalog_refresh_pending"] = refresh_pending
+    return payload
 
 
 def cli_apps_action(action: str, query: QueryParams) -> dict[str, Any]:

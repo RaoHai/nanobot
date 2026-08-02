@@ -1,24 +1,45 @@
-import { Children, isValidElement, useMemo, type ReactNode } from "react";
-import type { Components, Options as ReactMarkdownOptions } from "react-markdown";
-import ReactMarkdown from "react-markdown";
+import {
+  Children,
+  isValidElement,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
+import { useTranslation } from "react-i18next";
 import rehypeKatex from "rehype-katex";
-import { Check } from "lucide-react";
+import { Check, Globe2 } from "lucide-react";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
+import { Streamdown, type Components, type StreamdownProps } from "streamdown";
 
 import { AttachmentTile } from "@/components/AttachmentTile";
 import { CodeBlock } from "@/components/CodeBlock";
-import { FileReferenceChip, isLikelyFilePath } from "@/components/FileReferenceChip";
+import {
+  useFilePreviewAvailabilityResolver,
+  type FilePreviewAvailabilityResolver,
+} from "@/components/FilePreviewAvailabilityContext";
+import {
+  FileReferenceChip,
+  isFilePatternReference,
+  isLikelyFilePath,
+} from "@/components/FileReferenceChip";
+import { useLogoFallback } from "@/hooks/useLogoFallback";
 import { inferMediaKind } from "@/lib/media";
+import { browserSafeFaviconUrls } from "@/lib/provider-brand";
+import { remarkTexMath } from "@/lib/remark-tex-math";
 import { cn } from "@/lib/utils";
 
 import "katex/dist/katex.min.css";
+import "streamdown/styles.css";
 
 interface MarkdownTextRendererProps {
   children: string;
   className?: string;
   highlightCode?: boolean;
+  streaming?: boolean;
+  onOpenFilePreview?: (path: string) => void;
 }
 
 type MarkdownAstNode = {
@@ -32,11 +53,54 @@ type MarkdownAstNode = {
 
 type InlineLinkPreview = {
   href: string;
-  origin: string;
+  host: string;
   prefix?: string;
   title: string;
-  initials: string;
 };
+
+type AvailabilityResult = {
+  available: boolean;
+  path: string;
+  resolve: FilePreviewAvailabilityResolver;
+};
+
+function InferredFileReferenceChip({
+  path,
+  onOpen,
+}: {
+  path: string;
+  onOpen?: (path: string) => void;
+}) {
+  const resolve = useFilePreviewAvailabilityResolver();
+  const [result, setResult] = useState<AvailabilityResult | null>(null);
+
+  useEffect(() => {
+    if (!resolve || !onOpen) return;
+    let cancelled = false;
+    resolve(path)
+      .then((available) => {
+        if (!cancelled) setResult({ available, path, resolve });
+      })
+      .catch(() => {
+        if (!cancelled) setResult({ available: false, path, resolve });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [onOpen, path, resolve]);
+
+  const resolvedAvailable = !resolve || (
+    result?.resolve === resolve
+    && result.path === path
+    && result.available
+  );
+  return (
+    <FileReferenceChip
+      path={path}
+      onOpen={onOpen && resolvedAvailable ? onOpen : undefined}
+    />
+  );
+}
 
 const SAFE_INLINE_HTML_TAGS = new Set(["mark", "sub", "sup"]);
 
@@ -173,18 +237,115 @@ function remarkSafeHtmlSubset() {
   };
 }
 
-const remarkPlugins: NonNullable<ReactMarkdownOptions["remarkPlugins"]> = [
+// Recover a common model-output edge case that CommonMark leaves as literal
+// text: `**结论。**如果`, with no separator after the closing delimiter.
+const CJK_AFTER_STRONG =
+  /(?<!\\)\*\*([^*\r\n]+?)(?<!\\)\*\*(?=[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}])/gu;
+
+function normalizeCjkStrongBoundaries(node: MarkdownAstNode): void {
+  if (!node.children) return;
+  node.children = node.children.flatMap((child) => {
+    if (child.type !== "text" || !child.value?.includes("**")) {
+      normalizeCjkStrongBoundaries(child);
+      return [child];
+    }
+
+    const replacement: MarkdownAstNode[] = [];
+    let cursor = 0;
+    for (const match of child.value.matchAll(CJK_AFTER_STRONG)) {
+      const start = match.index;
+      if (start > cursor) replacement.push(safeText(child.value.slice(cursor, start)));
+      replacement.push({
+        type: "strong",
+        children: [safeText(match[1])],
+      });
+      cursor = start + match[0].length;
+    }
+    if (cursor === 0) return [child];
+    if (cursor < child.value.length) replacement.push(safeText(child.value.slice(cursor)));
+    return replacement;
+  });
+}
+
+function remarkCjkStrongBoundaries() {
+  return (tree: MarkdownAstNode) => {
+    normalizeCjkStrongBoundaries(tree);
+  };
+}
+
+const remarkPlugins: NonNullable<StreamdownProps["remarkPlugins"]> = [
   remarkBreaks,
   remarkGfm,
   [remarkMath, { singleDollarTextMath: false }],
+  remarkTexMath,
+  remarkCjkStrongBoundaries,
   remarkSafeHtmlSubset,
 ];
-const rehypePlugins: NonNullable<ReactMarkdownOptions["rehypePlugins"]> = [rehypeKatex];
+const rehypePlugins: NonNullable<StreamdownProps["rehypePlugins"]> = [rehypeKatex];
+
+const DIRECT_LINKS = { enabled: false } as const;
+const SAFE_MARKDOWN_PROTOCOL = /^(https?|ircs?|mailto|xmpp)$/i;
+
+/** Preserve react-markdown's URL policy when rendering through Streamdown. */
+const safeMarkdownUrl: NonNullable<StreamdownProps["urlTransform"]> = (url) => {
+  const colon = url.indexOf(":");
+  const questionMark = url.indexOf("?");
+  const hash = url.indexOf("#");
+  const slash = url.indexOf("/");
+  const relative = colon === -1
+    || (slash !== -1 && colon > slash)
+    || (questionMark !== -1 && colon > questionMark)
+    || (hash !== -1 && colon > hash);
+  return relative || SAFE_MARKDOWN_PROTOCOL.test(url.slice(0, colon)) ? url : "";
+};
 
 function nodeText(value: ReactNode): string {
   return Children.toArray(value)
-    .map((child) => (typeof child === "string" || typeof child === "number" ? String(child) : ""))
+    .map((child) => {
+      if (typeof child === "string" || typeof child === "number") return String(child);
+      if (!isValidElement<{ children?: ReactNode }>(child)) return "";
+      return nodeText(child.props.children);
+    })
     .join("");
+}
+
+function cleanFileReferenceTarget(value: string): string {
+  let target = value.trim();
+  if (!target) return "";
+  try {
+    if (/^file:\/\//i.test(target)) {
+      target = decodeURIComponent(new URL(target).pathname);
+    } else {
+      target = decodeURIComponent(target);
+    }
+  } catch {
+    // Keep the raw value when URL/path decoding is not possible.
+  }
+  target = target.split("?", 1)[0]?.split("#", 1)[0]?.trim() ?? "";
+  if (!/^[A-Za-z]:[\\/]/.test(target)) {
+    target = target.replace(/:\d+(?::\d+)?$/, "");
+  }
+  return target;
+}
+
+function isPreviewableFileTarget(value: string): boolean {
+  if (isFilePatternReference(value)) return false;
+  if (isLikelyFilePath(value)) return true;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(value)) return false;
+  if (/[\\/]/.test(value)) return false;
+  return /^[^?#]+\.[a-z0-9][a-z0-9_-]{0,12}$/i.test(value);
+}
+
+function isNonNavigableFilePatternLink(href: string | undefined): boolean {
+  if (!href || /^https?:\/\//i.test(href) || href.startsWith("#")) return false;
+  const target = cleanFileReferenceTarget(href);
+  return Boolean(target && isFilePatternReference(target));
+}
+
+function fileReferenceFromLink(href: string | undefined): string | null {
+  if (!href || /^https?:\/\//i.test(href) || href.startsWith("#")) return null;
+  const target = cleanFileReferenceTarget(href);
+  return isPreviewableFileTarget(target) ? target : null;
 }
 
 function linkPreviewParts(value: ReactNode): { text: string; href?: string } {
@@ -216,16 +377,6 @@ function cleanLinkPreviewText(value: string): string {
     .trim();
 }
 
-function linkPreviewInitials(value: string): string {
-  const clean = value
-    .replace(/^https?:\/\//i, "")
-    .replace(/^www\./i, "")
-    .replace(/\.[a-z]{2,}$/i, "");
-  const parts = clean.split(/[\s.-]+/).filter(Boolean);
-  return (parts.length > 1 ? parts.slice(0, 2).map((part) => part[0]).join("") : clean.slice(0, 2))
-    .toUpperCase();
-}
-
 function inlineLinkPreviewFromChildren(children: ReactNode): InlineLinkPreview | null {
   const { text: rawText, href } = linkPreviewParts(children);
   if (!href) return null;
@@ -253,17 +404,18 @@ function inlineLinkPreviewFromChildren(children: ReactNode): InlineLinkPreview |
 
   return {
     href,
-    origin: url.origin,
+    host: url.hostname,
     prefix,
     title,
-    initials: linkPreviewInitials(prefix || url.hostname),
   };
 }
 
 function InlineLinkPreviewRow({ link }: { link: InlineLinkPreview }) {
+  const { favicon, onFaviconError, onFaviconLoad } = useFaviconFallback(link.host);
   const label = link.prefix
     ? `${link.prefix} — ${link.title}`
     : link.title;
+
   return (
     <a
       href={link.href}
@@ -278,26 +430,42 @@ function InlineLinkPreviewRow({ link }: { link: InlineLinkPreview }) {
       <span
         className={cn(
           "relative grid h-4 w-4 shrink-0 place-items-center overflow-hidden rounded-[4px]",
-          "border border-border/65 bg-background text-[0.5rem] font-semibold text-muted-foreground",
+          "border border-border/65 bg-background text-muted-foreground",
         )}
         aria-hidden
       >
-        {link.initials}
-        <img
-          src={`${link.origin}/favicon.ico`}
-          alt=""
-          className="absolute h-3 w-3 rounded-[2px] object-contain"
-          loading="lazy"
-          onError={(event) => {
-            event.currentTarget.style.display = "none";
-          }}
-        />
+        {favicon ? (
+          <img
+            src={favicon}
+            alt=""
+            className="h-3 w-3 rounded-[2px] object-contain"
+            decoding="async"
+            loading="lazy"
+            referrerPolicy="no-referrer"
+            draggable={false}
+            onLoad={onFaviconLoad}
+            onError={onFaviconError}
+          />
+        ) : (
+          <Globe2 className="h-3 w-3" />
+        )}
       </span>
-      <span className="min-w-0 truncate leading-normal">
+      <span className="min-w-0 [overflow-wrap:anywhere] leading-normal sm:truncate">
         {label}
       </span>
     </a>
   );
+}
+
+function useFaviconFallback(host: string) {
+  const faviconCandidates = useMemo(() => browserSafeFaviconUrls(host), [host]);
+  const { logoUrl, onLogoError, onLogoLoad } = useLogoFallback(faviconCandidates);
+
+  return {
+    favicon: logoUrl ?? null,
+    onFaviconError: onLogoError,
+    onFaviconLoad: onLogoLoad,
+  };
 }
 
 function isRenderedCodeBlock(value: ReactNode): boolean {
@@ -326,10 +494,14 @@ export default function MarkdownTextRenderer({
   children,
   className,
   highlightCode = true,
+  streaming = false,
+  onOpenFilePreview,
 }: MarkdownTextRendererProps) {
+  const { t } = useTranslation();
   const components = useMemo<Components>(
     () => ({
-      code({ className: cls, children: kids, ...props }) {
+      code({ className: cls, children: kids, node: _node, ...props }) {
+        void _node;
         const match = /language-(\w+)/.exec(cls || "");
         if (match) {
           const code = String(kids).replace(/\n$/, "");
@@ -339,12 +511,18 @@ export default function MarkdownTextRenderer({
               code={code}
               className="my-3"
               highlight={highlightCode}
+              showLineNumbers={code.includes("\n")}
             />
           );
         }
         const raw = String(kids).replace(/\n$/, "");
         if (isLikelyFilePath(raw)) {
-          return <FileReferenceChip path={raw} />;
+          return (
+            <InferredFileReferenceChip
+              path={raw}
+              onOpen={onOpenFilePreview}
+            />
+          );
         }
         /** Plain fenced ``` blocks (no language) & wide one-liners: block monospace, not inline pill. */
         const widePlainBlock = raw.includes("\n") || raw.length > 120;
@@ -352,7 +530,7 @@ export default function MarkdownTextRenderer({
           return (
             <code
               className={cn(
-                "block min-w-0 whitespace-pre bg-transparent p-0 font-mono text-[0.8125rem]",
+                "block min-w-0 max-w-full overflow-x-auto whitespace-pre bg-transparent p-0 font-mono text-[0.8125rem]",
                 "leading-snug text-inherit",
                 cls,
               )}
@@ -389,6 +567,7 @@ export default function MarkdownTextRenderer({
               code={fence.code}
               className="my-3"
               highlight={highlightCode}
+              showLineNumbers={fence.code.includes("\n")}
             />
           );
         }
@@ -404,7 +583,29 @@ export default function MarkdownTextRenderer({
           </pre>
         );
       },
-      a({ href, children: markdownChildren, ...props }) {
+      a({ href, children: markdownChildren, node: _node, ...props }) {
+        void _node;
+        if (!href) {
+          return <>{markdownChildren}</>;
+        }
+        if (href === "streamdown:incomplete-link") {
+          return <>{markdownChildren}</>;
+        }
+        const filePath = fileReferenceFromLink(href);
+        if (filePath) {
+          const label = nodeText(markdownChildren).trim();
+          return (
+            <FileReferenceChip
+              path={label || filePath}
+              tooltipPath={filePath}
+              previewPath={filePath}
+              onOpen={onOpenFilePreview}
+            />
+          );
+        }
+        if (isNonNavigableFilePatternLink(href)) {
+          return <>{markdownChildren}</>;
+        }
         return (
           <a
             href={href}
@@ -417,6 +618,53 @@ export default function MarkdownTextRenderer({
           </a>
         );
       },
+      // Streamdown decorates emphasis with spans by default. Preserve native
+      // semantics for accessibility and predictable typography.
+      strong({ children: markdownChildren, node: _node, ...props }) {
+        void _node;
+        return <strong {...props}>{markdownChildren}</strong>;
+      },
+      em({ children: markdownChildren, node: _node, ...props }) {
+        void _node;
+        return <em {...props}>{markdownChildren}</em>;
+      },
+      del({ children: markdownChildren, node: _node, ...props }) {
+        void _node;
+        return <del {...props}>{markdownChildren}</del>;
+      },
+      table({ children: tableChildren, node: _node, ...props }) {
+        void _node;
+        return (
+          <div
+            data-testid="markdown-data-table"
+            data-table-kind="data"
+            role="region"
+            tabIndex={0}
+            aria-label={t("message.dataTable", { defaultValue: "Data table" })}
+            className={cn(
+              "not-prose mb-5 mt-3 w-full max-w-full overflow-x-auto rounded-lg",
+              "border border-border/65 bg-muted/20",
+              "overscroll-x-contain focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+            )}
+          >
+            <table
+              className={cn(
+                "w-full min-w-max border-collapse text-[13px] leading-5",
+                "[&_thead]:bg-muted/45 [&_thead]:text-muted-foreground",
+                "[&_th]:border-b [&_th]:border-border/65 [&_th]:px-3 [&_th]:py-2",
+                "[&_th]:text-left [&_th]:font-medium",
+                "[&_td]:border-b [&_td]:border-border/55 [&_td]:px-3 [&_td]:py-2",
+                "[&_th:not(:last-child)]:border-r [&_th:not(:last-child)]:border-border/45",
+                "[&_td:not(:last-child)]:border-r [&_td:not(:last-child)]:border-border/45",
+                "[&_tbody_tr:last-child_td]:border-b-0",
+              )}
+              {...props}
+            >
+              {tableChildren}
+            </table>
+          </div>
+        );
+      },
       li({ children: markdownChildren, className: itemClassName }) {
         const link = inlineLinkPreviewFromChildren(markdownChildren);
         if (link) {
@@ -426,8 +674,16 @@ export default function MarkdownTextRenderer({
             </li>
           );
         }
+        const taskItem = itemClassName?.includes("task-list-item");
         return (
-          <li className={itemClassName}>
+          <li
+            className={cn(
+              itemClassName,
+              taskItem
+                ? "flex min-w-0 items-start gap-2 text-[13px] leading-5 [&>p]:m-0"
+                : "[&>p]:inline",
+            )}
+          >
             {markdownChildren}
           </li>
         );
@@ -438,10 +694,11 @@ export default function MarkdownTextRenderer({
           <span
             aria-hidden
             data-testid="markdown-task-checkbox"
+            data-task-checked={checked ? "true" : "false"}
             className={cn(
-              "mr-2 inline-grid h-4 w-4 translate-y-[2px] place-items-center rounded-[4px]",
-              "border border-border/70 bg-muted/55 text-background",
-              checked && "border-foreground/55 bg-foreground/65",
+              "mt-0.5 inline-grid h-4 w-4 shrink-0 place-items-center rounded-full",
+              "border border-dashed border-muted-foreground/55 bg-background text-background",
+              checked && "border-solid border-emerald-500 bg-emerald-500 text-white",
             )}
           >
             {checked ? <Check className="h-3 w-3 stroke-[3]" /> : null}
@@ -495,11 +752,20 @@ export default function MarkdownTextRenderer({
         );
       },
     }),
-    [highlightCode],
+    [highlightCode, onOpenFilePreview, t],
   );
 
   return (
-    <div
+    <Streamdown
+      mode={streaming ? "streaming" : "static"}
+      parseIncompleteMarkdown
+      isAnimating={false}
+      animated={false}
+      linkSafety={DIRECT_LINKS}
+      urlTransform={safeMarkdownUrl}
+      remarkPlugins={remarkPlugins}
+      rehypePlugins={rehypePlugins}
+      components={components}
       className={cn(
         "markdown-content prose max-w-none dark:prose-invert",
         "prose-headings:mt-4 prose-headings:mb-2 prose-headings:font-semibold prose-headings:tracking-tight",
@@ -512,18 +778,10 @@ export default function MarkdownTextRenderer({
         "prose-hr:my-6",
         "prose-pre:my-0 prose-pre:bg-transparent prose-pre:p-0",
         "prose-code:before:content-none prose-code:after:content-none prose-code:font-normal",
-        "prose-table:my-3 prose-th:text-left prose-th:font-medium",
         className,
       )}
-      style={{ lineHeight: "var(--cjk-line-height)" }}
     >
-      <ReactMarkdown
-        remarkPlugins={remarkPlugins}
-        rehypePlugins={rehypePlugins}
-        components={components}
-      >
-        {children}
-      </ReactMarkdown>
-    </div>
+      {children}
+    </Streamdown>
   );
 }
