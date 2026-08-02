@@ -220,10 +220,12 @@ class BaseChannel(ABC):
             allow_list = getattr(self.config, "allow_from", None) or []
         if "*" in allow_list:
             return True
-        # allowFrom entries are opaque tokens — must match exactly.
-        if str(sender_id) in allow_list:
+        sid = str(sender_id)
+        # Telegram sender ids may include a username suffix ("id|username"); allow matching the bare id.
+        bare_id = sid.split("|", 1)[0]
+        if sid in allow_list or bare_id in allow_list:
             return True
-        if is_approved(self.name, str(sender_id)):
+        if is_approved(self.name, sid) or is_approved(self.name, bare_id):
             return True
         return False
 
