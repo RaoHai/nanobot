@@ -41,11 +41,18 @@ class MessageBus:
                 return
         await self.inbound.put(msg)
 
+    @staticmethod
+    def _is_command(msg: InboundMessage) -> bool:
+        """Slash commands must keep their leading '/' so the command router
+        can recognize them; never merge them with other messages."""
+        return msg.content.strip().startswith("/")
+
     async def consume_inbound(self) -> InboundMessage:
         """Consume the next inbound message (blocks until available).
 
         Also drains any same-session messages already sitting in the queue
-        (accumulated between turns) and merges them into one.
+        (accumulated between turns) and merges them into one. Messages that
+        look like slash commands are requeued and processed individually.
         """
         msg = await self.inbound.get()
 
@@ -65,8 +72,14 @@ class MessageBus:
             await self.inbound.put(m)
 
         if len(same_session) > 1:
-            logger.info("Merging {} queued messages for session {}", len(same_session), msg.session_key)
-            msg = self._merge_buffered_messages(same_session)
+            if any(self._is_command(m) for m in same_session):
+                # Commands must be dispatched individually; requeue the rest
+                # in original order and handle one message per turn.
+                for m in same_session[1:]:
+                    await self.inbound.put(m)
+            else:
+                logger.info("Merging {} queued messages for session {}", len(same_session), msg.session_key)
+                msg = self._merge_buffered_messages(same_session)
 
         async with self._inbound_collect_lock:
             self._active_inbound_session = msg.session_key
@@ -76,11 +89,18 @@ class MessageBus:
         """Called when a turn is complete. Flushes buffered messages if any."""
         async with self._inbound_collect_lock:
             buffered = self._inbound_collect_buffer.pop(msg.session_key, [])
-            if buffered:
-                merged = self._merge_buffered_messages(buffered)
-                await self.inbound.put(merged)
-                logger.info(f"Merged {len(buffered)} buffered messages for {msg.session_key}")
             self._active_inbound_session = None
+        if not buffered:
+            return
+        if any(self._is_command(m) for m in buffered):
+            # Keep commands intact: flush each buffered message individually.
+            for m in buffered:
+                await self.inbound.put(m)
+            logger.info(f"Flushed {len(buffered)} buffered messages individually for {msg.session_key}")
+            return
+        merged = self._merge_buffered_messages(buffered)
+        await self.inbound.put(merged)
+        logger.info(f"Merged {len(buffered)} buffered messages for {msg.session_key}")
 
     @classmethod
     def _merge_buffered_messages(cls, messages: list[InboundMessage]) -> InboundMessage:
