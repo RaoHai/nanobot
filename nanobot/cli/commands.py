@@ -36,6 +36,8 @@ _log_handler_id = logger.add(
     ),
     level="INFO",
     colorize=None,
+    backtrace=False,
+    diagnose=False,
     filter=lambda record: record["extra"].setdefault("channel", "-") or True,
 )
 

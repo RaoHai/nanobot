@@ -259,6 +259,7 @@ class AgentLoop:
         context_window_tokens: int | None = None,
         context_block_limit: int | None = None,
         max_tool_result_chars: int | None = None,
+        history_max_age_hours: float = 24.0,
         fail_on_tool_error: bool | None = None,
         provider_retry_mode: str = "standard",
         tool_hint_max_length: int | None = None,
@@ -344,6 +345,7 @@ class AgentLoop:
             if max_tool_result_chars is not None
             else defaults.max_tool_result_chars
         )
+        self.history_max_age_hours = history_max_age_hours
         self.provider_retry_mode = provider_retry_mode
         self.tool_hint_max_length = (
             tool_hint_max_length if tool_hint_max_length is not None
@@ -1334,6 +1336,7 @@ class AgentLoop:
                         await delivery.idle()
                     await self._publish_next_deferred_automation_turn(session_key)
         finally:
+            await self.bus.complete_inbound_turn(msg)
             if pending is None:
                 await delivery.idle()
                 await self._publish_next_deferred_automation_turn(session_key)
@@ -1707,6 +1710,7 @@ class AgentLoop:
 
         _hist_kwargs: dict[str, Any] = {
             "max_messages": replay_max_messages,
+            "max_age_hours": self.history_max_age_hours,
             "max_tokens": self._replay_token_budget(runtime),
             "extend_to_user": is_subagent,
         }

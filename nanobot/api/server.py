@@ -12,10 +12,13 @@ import hmac
 import json as _json
 import time
 import uuid
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, cast
 
 from aiohttp import web
 from loguru import logger
+
+from nanobot.api.log_watcher import LogWatcher
 
 from nanobot.config.paths import get_media_dir
 from nanobot.utils.helpers import safe_filename
@@ -39,7 +42,55 @@ __all__ = (
     "_save_base64_data_url",
     "create_app",
     "handle_chat_completions",
+    "StatusServer",
 )
+
+
+class StatusServer:
+    """HTTP server providing status and log snapshots for external devices."""
+
+    def __init__(self, host: str = "0.0.0.0", port: int = 8080, log_dir: Path | None = None):
+        self.host = host
+        self.port = port
+        self.watcher = LogWatcher(log_dir)
+        self.app = web.Application()
+        self._runner: web.AppRunner | None = None
+        self._setup_routes()
+
+    def _setup_routes(self) -> None:
+        self.app.router.add_get("/api/status", self._handle_status)
+        self.app.router.add_get("/health", self._handle_health)
+
+    async def _handle_status(self, request: web.Request) -> web.Response:
+        cursor = request.query.get("cursor")
+        return web.json_response(self.watcher.get_status(cursor))
+
+    async def _handle_health(self, request: web.Request) -> web.Response:
+        return web.json_response({"status": "ok"})
+
+    async def start(self) -> None:
+        await self.watcher.start()
+        self._runner = web.AppRunner(self.app)
+        await self._runner.setup()
+        site = web.TCPSite(self._runner, self.host, self.port)
+        await site.start()
+        logger.info("Status API server started on http://{}:{}", self.host, self.port)
+
+    async def stop(self) -> None:
+        if self._runner:
+            await self._runner.cleanup()
+        await self.watcher.stop()
+        logger.info("Status API server stopped")
+
+    async def run_forever(self) -> None:
+        await self.start()
+        try:
+            while True:
+                await asyncio.sleep(3600)
+        except asyncio.CancelledError:
+            pass
+        finally:
+            await self.stop()
 
 
 API_SESSION_KEY = "api:default"

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import re
+import socket
 import time
 import unicodedata
 from contextlib import suppress
@@ -38,6 +40,18 @@ from nanobot.config.paths import get_media_dir
 from nanobot.config.schema import Base
 from nanobot.security.network import validate_url_target
 from nanobot.utils.helpers import split_message
+
+
+_TELEGRAM_API_IP = os.getenv("TELEGRAM_API_IP", "").strip()
+if _TELEGRAM_API_IP:
+    _original_getaddrinfo = socket.getaddrinfo
+
+    def _telegram_getaddrinfo(host: object, port: object, *args: Any, **kwargs: Any):
+        if host in ("api.telegram.org", b"api.telegram.org"):
+            host = _TELEGRAM_API_IP
+        return _original_getaddrinfo(host, port, *args, **kwargs)
+
+    socket.getaddrinfo = _telegram_getaddrinfo
 
 TELEGRAM_MAX_MESSAGE_LEN = 4000  # Telegram message character limit
 # Telegram's actual API limit is 4096; we split raw markdown at 4000 as a
@@ -751,6 +765,12 @@ class TelegramChannel(BaseChannel):
             return
 
         progress_event = msg.event if isinstance(msg.event, ProgressEvent) else None
+        reaction_to_message_id = msg.metadata.get("reaction_to_message_id")
+        if msg.reaction and reaction_to_message_id:
+            with suppress(ValueError):
+                await self._add_reaction(msg.chat_id, int(reaction_to_message_id), msg.reaction)
+            if not msg.content and not msg.media:
+                return
 
         # Only stop typing indicator and remove reaction for final responses
         if progress_event is None:

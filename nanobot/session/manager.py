@@ -9,7 +9,7 @@ from collections import OrderedDict
 from contextlib import suppress
 from copy import deepcopy
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Protocol, TypedDict, cast
 from weakref import WeakValueDictionary
@@ -187,6 +187,7 @@ class Session:
     def get_history(
         self,
         max_messages: int = FILE_MAX_MESSAGES,
+        max_age_hours: float = 24.0,
         *,
         max_tokens: int = 0,
         extend_to_user: bool = False,
@@ -194,8 +195,8 @@ class Session:
     ) -> list[dict[str, Any]]:
         """Return recent replayable messages for LLM input.
 
-        History is sliced by message count first (``max_messages``), then by
-        token budget from the tail (``max_tokens``) when provided.
+        History is sliced from ``last_consolidated``, filtered by age, then by
+        message count and token budget from the tail when provided.
         """
         replay_start = self.last_consolidated
         if replay_start:
@@ -210,6 +211,24 @@ class Session:
             replay_start = min(replay_start, recent_start)
 
         replayable = self.messages[replay_start:]
+        if max_age_hours > 0:
+            cutoff = datetime.now(timezone.utc) - timedelta(hours=max_age_hours)
+            fresh: list[dict[str, Any]] = []
+            for message in replayable:
+                ts_value = message.get("timestamp")
+                if not isinstance(ts_value, str):
+                    fresh.append(message)
+                    continue
+                try:
+                    ts = datetime.fromisoformat(ts_value)
+                except ValueError:
+                    fresh.append(message)
+                    continue
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=timezone.utc)
+                if ts >= cutoff:
+                    fresh.append(message)
+            replayable = fresh
         max_messages = max_messages if max_messages > 0 else FILE_MAX_MESSAGES
         unarchived_count = len(self.messages) - self.last_consolidated
         if replay_start < self.last_consolidated and unarchived_count < max_messages:

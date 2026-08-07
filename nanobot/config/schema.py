@@ -80,6 +80,12 @@ class DreamConfig(Base):
         return f"every {hours}h"
 
 
+class ThinkingConfig(BaseModel):
+    """Extended thinking configuration for Anthropic models."""
+    enabled: bool = False
+    budget_tokens: int = 10000  # Token budget for thinking (1024-100000)
+
+
 class InlineFallbackConfig(Base):
     """One inline fallback model configuration."""
 
@@ -126,12 +132,13 @@ class AgentDefaults(Base):
     max_tokens: int = 8192
     context_window_tokens: int = 200_000
     context_block_limit: int | None = None
-    temperature: float = 0.1
+    temperature: float = 0.7
     fallback_models: list[FallbackCandidate] = Field(default_factory=list)
     max_tool_iterations: int = 200
     max_concurrent_subagents: int = Field(default=1, ge=1)
     fail_on_tool_error: bool = True
     max_tool_result_chars: int = 16_000
+    memory_window: int = 50
     provider_retry_mode: Literal["standard", "persistent"] = "standard"
     tool_hint_max_length: int = Field(
         default=40,
@@ -146,7 +153,7 @@ class AgentDefaults(Base):
     bot_name: str = "nanobot"  # Display name shown in CLI prompts (e.g. "{name} is thinking...")
     bot_icon: str = "🐈"  # Short icon (emoji or text) shown next to the bot name in CLI; "" to omit
     unified_session: bool = False  # Share one session across all channels (single-user multi-device)
-    disabled_skills: list[str] = Field(default_factory=list)  # Skill names to exclude from loading (e.g. ["summarize", "skill-creator"])
+    disabled_skills: list[str] = Field(default_factory=list)
     session_ttl_minutes: int = Field(
         default=15,
         ge=0,
@@ -165,6 +172,9 @@ class AgentDefaults(Base):
         serialization_alias="consolidationRatio",
     )  # Consolidation target ratio (0.5 = 50% of budget retained after compression)
     dream: DreamConfig = Field(default_factory=DreamConfig)
+    # Anthropic-specific parameters
+    effort: str | None = None  # "low", "medium", "high", "max" (Claude 4.5+ only)
+    thinking: ThinkingConfig = Field(default_factory=ThinkingConfig)  # Extended thinking
 
     @model_validator(mode="before")
     @classmethod
@@ -336,7 +346,7 @@ class HeartbeatConfig(Base):
     """Heartbeat service configuration (now backed by cron)."""
 
     enabled: bool = True
-    interval_s: int = 30 * 60  # 30 minutes
+    interval_s: int = 24 * 60 * 60  # 24 hours
     keep_recent_messages: int = 8
 
 

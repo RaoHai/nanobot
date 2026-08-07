@@ -33,6 +33,10 @@ from nanobot.security.workspace_access import current_tool_workspace
             "(never pass client_id values like anon-…). "
             "Do not set this to the current runtime chat for a normal reply."
         ),
+        reaction=StringSchema(
+            "Optional emoji reaction to add to the replied Telegram message. "
+            "Use only when reacting instead of sending a normal message."
+        ),
         media=ArraySchema(
             StringSchema(""),
             description=(
@@ -149,6 +153,7 @@ class MessageTool(Tool):
         channel: str | None = None,
         chat_id: str | None = None,
         message_id: str | None = None,
+        reaction: str | None = None,
         media: list[str] | None = None,
         buttons: Any = None,
         **kwargs: Any,
@@ -226,7 +231,9 @@ class MessageTool(Tool):
         metadata = dict(default_metadata) if same_target else {}
         if message_id:
             metadata["message_id"] = message_id
-        if media:
+        if reaction and message_id:
+            metadata["reaction_to_message_id"] = message_id
+        if media or reaction:
             metadata["_record_channel_delivery"] = True
 
         msg = OutboundMessage(
@@ -234,6 +241,7 @@ class MessageTool(Tool):
             chat_id=chat_id,
             content=content,
             media=media or [],
+            reaction=reaction,
             buttons=button_rows or [],
             metadata=metadata,
         )
@@ -247,11 +255,12 @@ class MessageTool(Tool):
             if channel == default_channel and chat_id == default_chat_id:
                 self._sent_in_turn = True
             media_info = f" with {len(media)} attachments" if media else ""
+            reaction_info = " with reaction" if reaction else ""
             button_info = (
                 f" with {sum(len(row) for row in button_rows)} button(s)"
                 if button_rows
                 else ""
             )
-            return f"Message sent to {channel}:{chat_id}{media_info}{button_info}"
+            return f"Message sent to {channel}:{chat_id}{media_info}{reaction_info}{button_info}"
         except Exception as e:
             return ToolResult.error(f"Error sending message: {str(e)}")
