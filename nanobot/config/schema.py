@@ -79,7 +79,7 @@ class DreamConfig(Base):
         return f"every {hours}h"
 
 
-class ThinkingConfig(BaseModel):
+class ThinkingConfig(Base):
     """Extended thinking configuration for Anthropic models."""
     enabled: bool = False
     budget_tokens: int = 10000  # Token budget for thinking (1024-100000)
