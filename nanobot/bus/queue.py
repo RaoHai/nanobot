@@ -33,6 +33,7 @@ class MessageBus:
         If the same session is currently being processed, buffer the message
         instead of triggering a new turn.
         """
+        self._apply_group_sender_label(msg)
         async with self._inbound_collect_lock:
             if self._active_inbound_session and msg.session_key == self._active_inbound_session:
                 # Same session is active, buffer this message
@@ -46,6 +47,27 @@ class MessageBus:
         """Slash commands must keep their leading '/' so the command router
         can recognize them; never merge them with other messages."""
         return msg.content.strip().startswith("/")
+
+    @classmethod
+    def _apply_group_sender_label(cls, msg: InboundMessage) -> None:
+        """Prefix group-chat messages with ``[sender_id]`` in place.
+
+        Multi-user group sessions need per-message attribution even when a
+        turn contains a single message (merge-time labeling only covers
+        bursts). DMs, slash commands, and system turns are left untouched.
+        Idempotent: already-labeled content is not labeled again.
+        """
+        if cls._is_command(msg):
+            return
+        if not (msg.metadata or {}).get("is_group"):
+            return
+        label = f"[{msg.sender_id}]"
+        content = msg.content or ""
+        if content.startswith(label):
+            return
+        if not content.strip() and not msg.media:
+            return
+        msg.content = f"{label} {content}" if content else label
 
     async def consume_inbound(self) -> InboundMessage:
         """Consume the next inbound message (blocks until available).
@@ -108,8 +130,14 @@ class MessageBus:
         if len(messages) == 1:
             return messages[0]
 
-        # Multiple messages: add [sender_id] prefix, join with \n\n
-        parts = [f"[{m.sender_id}] {m.content}" for m in messages]
+        # Multiple messages: add [sender_id] prefix, join with \n\n.
+        # Messages labeled at publish time (group chats) keep their label.
+        parts = [
+            m.content
+            if (m.content or "").startswith(f"[{m.sender_id}]")
+            else f"[{m.sender_id}] {m.content}"
+            for m in messages
+        ]
         merged_content = "\n\n".join(parts)
         merged_media = [item for m in messages for item in m.media]
 
