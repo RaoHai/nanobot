@@ -88,6 +88,9 @@ class _FakeBot:
     async def send_document(self, **kwargs) -> None:
         self.sent_media.append({"kind": "document", **kwargs})
 
+    async def send_sticker(self, **kwargs) -> None:
+        self.sent_media.append({"kind": "sticker", **kwargs})
+
     async def send_chat_action(self, **kwargs) -> None:
         pass
 
@@ -1223,6 +1226,60 @@ async def test_send_local_media_preserves_filename(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_send_sticker_by_file_id() -> None:
+    channel = TelegramChannel(
+        TelegramConfig(enabled=True, token="123:abc", allow_from=["*"]),
+        MessageBus(),
+    )
+    channel._app = _FakeApp(lambda: None)
+
+    await channel.send(
+        OutboundMessage(
+            channel="telegram",
+            chat_id="123",
+            content="",
+            media=["sticker:CAACAgUAAxkBAAIBB2mPTDKdQ3sN4kVQdBbYdJBDpbg-AAIXHAACI194VH_lQ8M83k3HOgQ"],
+        )
+    )
+
+    assert channel._app.bot.sent_media == [
+        {
+            "kind": "sticker",
+            "chat_id": 123,
+            "sticker": "CAACAgUAAxkBAAIBB2mPTDKdQ3sN4kVQdBbYdJBDpbg-AAIXHAACI194VH_lQ8M83k3HOgQ",
+            "reply_parameters": None,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_send_empty_sticker_file_id_reports_failure() -> None:
+    channel = TelegramChannel(
+        TelegramConfig(enabled=True, token="123:abc", allow_from=["*"]),
+        MessageBus(),
+    )
+    channel._app = _FakeApp(lambda: None)
+
+    await channel.send(
+        OutboundMessage(
+            channel="telegram",
+            chat_id="123",
+            content="",
+            media=["sticker:"],
+        )
+    )
+
+    assert channel._app.bot.sent_media == []
+    assert channel._app.bot.sent_messages == [
+        {
+            "chat_id": 123,
+            "text": "[Failed to send: sticker:]",
+            "reply_parameters": None,
+        }
+    ]
+
+
+@pytest.mark.asyncio
 async def test_send_blocks_unsafe_remote_media_url(monkeypatch) -> None:
     channel = TelegramChannel(
         TelegramConfig(enabled=True, token="123:abc", allow_from=["*"]),
@@ -1322,7 +1379,7 @@ async def test_group_policy_mention_accepts_caption_mention() -> None:
     )
 
     assert len(handled) == 1
-    assert handled[0]["content"] == "@nanobot_test photo"
+    assert handled[0]["content"] == "[12345|alice] @nanobot_test photo"
 
 
 @pytest.mark.asyncio
@@ -1440,7 +1497,7 @@ async def test_on_message_includes_reply_context() -> None:
     await channel._on_message(update, None)
 
     assert len(handled) == 1
-    assert handled[0]["content"].startswith("[Reply to: Hello]")
+    assert handled[0]["content"].startswith("[12345|alice] [Reply to: Hello]")
     assert "translate this" in handled[0]["content"]
 
 
@@ -1574,7 +1631,7 @@ async def test_on_message_attaches_reply_to_media_when_available(monkeypatch, tm
     await channel._on_message(update, None)
 
     assert len(handled) == 1
-    assert handled[0]["content"].startswith("[Reply to: [image:")
+    assert handled[0]["content"].startswith("[12345|alice] [Reply to: [image:")
     assert "what is the image?" in handled[0]["content"]
     assert len(handled[0]["media"]) == 1
     assert "reply_photo_fid" in handled[0]["media"][0]
@@ -1882,7 +1939,62 @@ async def test_on_message_location_content() -> None:
     await channel._on_message(update, None)
 
     assert len(handled) == 1
-    assert handled[0]["content"] == "[location: 48.8566, 2.3522]"
+    assert handled[0]["content"] == "[12345|alice] [location: 48.8566, 2.3522]"
+
+
+@pytest.mark.asyncio
+async def test_group_message_always_prefixes_sender_id() -> None:
+    """Group messages carry a [sender_id] prefix even when delivered unmerged."""
+    channel = TelegramChannel(
+        TelegramConfig(enabled=True, token="123:abc", allow_from=["*"], group_policy="open"),
+        MessageBus(),
+    )
+    channel._app = _FakeApp(lambda: None)
+    handled = []
+    async def capture_handle(**kwargs) -> None:
+        handled.append(kwargs)
+    channel._handle_message = capture_handle
+    channel._start_typing = lambda _chat_id: None
+
+    await channel._on_message(_make_telegram_update(text="hello group"), None)
+
+    assert len(handled) == 1
+    assert handled[0]["content"] == "[12345|alice] hello group"
+
+
+@pytest.mark.asyncio
+async def test_private_message_has_no_sender_prefix() -> None:
+    """Private (DM) messages are forwarded without a sender prefix."""
+    channel = TelegramChannel(
+        TelegramConfig(enabled=True, token="123:abc", allow_from=["*"], group_policy="open"),
+        MessageBus(),
+    )
+    channel._app = _FakeApp(lambda: None)
+    handled = []
+    async def capture_handle(**kwargs) -> None:
+        handled.append(kwargs)
+    channel._handle_message = capture_handle
+    channel._start_typing = lambda _chat_id: None
+
+    await channel._on_message(_make_telegram_update(text="hello dm", chat_type="private"), None)
+
+    assert len(handled) == 1
+    assert handled[0]["content"] == "hello dm"
+
+
+@pytest.mark.asyncio
+async def test_merge_buffered_messages_does_not_double_prefix() -> None:
+    """Bus merge must not add a second [sender_id] prefix when one exists."""
+    from nanobot.bus.events import InboundMessage
+    from nanobot.bus.queue import MessageBus as _Bus
+
+    msgs = [
+        InboundMessage(channel="telegram", sender_id="12345|alice", chat_id="1", content="[12345|alice] hello"),
+        InboundMessage(channel="telegram", sender_id="999|bob", chat_id="1", content="hi there"),
+    ]
+    merged = _Bus._merge_buffered_messages(msgs)
+
+    assert merged.content == "[12345|alice] hello\n\n[999|bob] hi there"
 
 
 @pytest.mark.asyncio

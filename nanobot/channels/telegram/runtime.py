@@ -803,6 +803,20 @@ class TelegramChannel(BaseChannel):
         # Send media files
         for media_path in (msg.media or []):
             try:
+                # Sticker fast-path: "sticker:<file_id>" sends a TG sticker by file_id.
+                if media_path.startswith("sticker:"):
+                    sticker_id = media_path[len("sticker:"):]
+                    if not sticker_id:
+                        raise ValueError("empty sticker file_id")
+                    await self._call_with_retry(
+                        self._app.bot.send_sticker,
+                        chat_id=chat_id,
+                        sticker=sticker_id,
+                        reply_parameters=reply_params,
+                        **thread_kwargs,
+                    )
+                    continue
+
                 media_type = self._get_media_type(media_path)
                 sender = {
                     "photo": self._app.bot.send_photo,
@@ -1579,6 +1593,11 @@ class TelegramChannel(BaseChannel):
             if tag:
                 content_parts.insert(0, tag)
         content = "\n".join(content_parts) if content_parts else "[empty message]"
+
+        # Group chats: always tag content with the sender so the agent can tell
+        # speakers apart even for single (unmerged) messages.
+        if message.chat.type != "private" and not content.startswith(f"[{sender_id}]"):
+            content = f"[{sender_id}] {content}"
 
         self.logger.debug("message from {}: {}...", sender_id, content[:50])
 

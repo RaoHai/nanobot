@@ -138,7 +138,8 @@ class MessageTool(Tool):
         )
         workspace = access.project_path or self._workspace
         for p in media:
-            if p.startswith(("http://", "https://")):
+            if p.startswith(("http://", "https://", "sticker:")):
+                # URLs and pseudo-URIs (e.g. telegram sticker file_ids) pass through untouched.
                 resolved.append(p)
             elif not access.restrict_to_workspace:
                 path = Path(p).expanduser()

@@ -279,6 +279,28 @@ async def test_message_tool_passes_through_url_media_paths() -> None:
 
 
 @pytest.mark.asyncio
+async def test_message_tool_passes_through_sticker_media_uri() -> None:
+    """sticker:<file_id> pseudo-URIs must not be workspace-prefixed."""
+    sent: list[OutboundMessage] = []
+
+    async def _send(msg: OutboundMessage) -> None:
+        sent.append(msg)
+
+    tool = MessageTool(send_callback=_send)
+
+    sticker_uri = "sticker:CAACAgUAAxkBAAIBB2mPTDKdQ3sN4kVQdBbYdJBDpbg-AAIXHAACI194VH_lQ8M83k3HOgQ"
+
+    await tool.execute(
+        content="",
+        channel="telegram",
+        chat_id="1",
+        media=[sticker_uri],
+    )
+
+    assert sent[0].media == [sticker_uri]
+
+
+@pytest.mark.asyncio
 async def test_message_tool_resolves_mixed_media_paths() -> None:
     sent: list[OutboundMessage] = []
 

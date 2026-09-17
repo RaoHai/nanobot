@@ -88,8 +88,11 @@ class MessageBus:
         if len(messages) == 1:
             return messages[0]
 
-        # Multiple messages: add [sender_id] prefix, join with \n\n
-        parts = [f"[{m.sender_id}] {m.content}" for m in messages]
+        # Multiple messages: add [sender_id] prefix (unless already present), join with \n\n
+        parts = [
+            m.content if m.content.startswith(f"[{m.sender_id}]") else f"[{m.sender_id}] {m.content}"
+            for m in messages
+        ]
         merged_content = "\n\n".join(parts)
         merged_media = [item for m in messages for item in m.media]
 
