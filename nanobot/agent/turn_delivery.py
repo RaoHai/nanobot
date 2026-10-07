@@ -19,6 +19,7 @@ from nanobot.bus.outbound_events import (
 from nanobot.bus.progress import build_bus_progress_callback
 from nanobot.bus.queue import MessageBus
 from nanobot.bus.runtime_events import RuntimeEventBus, RuntimeEventPublisher
+from nanobot.utils.runtime import is_silent_content
 
 if TYPE_CHECKING:
     from nanobot.utils.llm_runtime import LLMRuntime
@@ -206,6 +207,16 @@ class TurnDelivery:
         metadata = dict(self.route.metadata)
         if self.route.publish_lifecycle and latency_ms is not None:
             metadata["latency_ms"] = int(latency_ms)
+        # Local fix (not in hk): [SILENT] → msg_type="silent", never send the
+        # marker text itself. Restore after hk merges (nanobot/.claude/CLAUDE.md §9).
+        if content is not None and is_silent_content(content):
+            return OutboundMessage(
+                channel=self.route.channel,
+                chat_id=self.route.chat_id,
+                content="",
+                metadata=metadata,
+                msg_type="silent",
+            )
         event = (
             StreamedResponseEvent()
             if self.route.publish_lifecycle

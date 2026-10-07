@@ -37,6 +37,7 @@ from nanobot.bus.queue import MessageBus
 from nanobot.channels.base import BaseChannel
 from nanobot.command.builtin import build_help_text
 from nanobot.config.paths import get_media_dir
+from nanobot.utils.runtime import is_silent_content
 from nanobot.config.schema import Base
 from nanobot.security.network import validate_url_target
 from nanobot.utils.helpers import split_message
@@ -778,6 +779,14 @@ class TelegramChannel(BaseChannel):
             if reply_to_message_id := msg.metadata.get("message_id"):
                 with suppress(ValueError):
                     await self._remove_reaction(msg.chat_id, int(reply_to_message_id))
+
+        # Local fix (not in hk): silent messages stop typing but are never
+        # delivered. Restore after hk merges (nanobot/.claude/CLAUDE.md §4/§9).
+        if msg.msg_type == "silent" or is_silent_content(msg.content):
+            self.logger.debug(
+                "Silent message for chat_id={}, skipping send", msg.chat_id
+            )
+            return
 
         try:
             chat_id = int(msg.chat_id)

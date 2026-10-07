@@ -2,7 +2,7 @@
 
 > 用于追踪本地 origin/main 相对于上游 hk (HKUDS/nanobot) 的独有功能，方便后续合并冲突时判断取舍。
 >
-> 最后更新：2026-03-29，基于 merge commit `36fca50`
+> 最后更新：2026-10-07，基于 merge commit `8f1d8f70`（该轮 hk merge 冲掉了 [SILENT] 拦截，已由 commit 修复补回，见下方 §9）
 
 ---
 
@@ -105,7 +105,7 @@
 - `run()` 的 `finally` 块必须调用 `await self.bus.complete_inbound_turn(msg)`，否则 buffer 永远不清空，所有后续消息被积压
 - `__init__` 新增 `history_max_age_hours: float = 24.0` 参数，两处 `get_history()` 调用均需透传 `max_age_hours=self.history_max_age_hours`
 - `/new` 和 `/help` 命令匹配需用 `cmd.split("@")[0]`，兼容 Telegram 群组的 `/cmd@botname` 格式
-- `[SILENT]` 输出需转换为 `msg_type="silent"` 的 OutboundMessage，不能直接发送文本
+- `[SILENT]` 输出需转换为 `msg_type="silent"` 的 OutboundMessage，不能直接发送文本。2026-10 重构后落点：`nanobot/utils/runtime.py` 的 `is_silent_content()`（整条输出精确匹配 `[SILENT]`/`[NO_RESPONSE]`/`[SKIP]`/裸 `SILENT`，大小写不敏感；**禁止包含匹配**，否则讨论标记本身的正常消息会被误吞）；`loop.py _assemble_outbound()` 与 `turn_delivery.py background_response()` 两条出口均做转换；`channels/telegram/runtime.py send()` 在 stop typing 后兜底拦截 `msg_type=="silent"` 或标记内容
 - `_save_turn()` 末尾需推进 `last_consolidated`：`if len(session.messages) - session.last_consolidated > self.memory_window: session.last_consolidated = len(session.messages) - self.memory_window`
 - `_run_agent_loop()` 中 LLM 无 tool call 时，final response 必须用 `add_assistant_message()` 写入 messages，否则不会存入 session
 

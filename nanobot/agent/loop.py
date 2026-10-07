@@ -91,6 +91,7 @@ from nanobot.utils.helpers import truncate_text as truncate_text_fn
 from nanobot.utils.llm_runtime import LLMRuntime
 from nanobot.utils.runtime import (
     EMPTY_FINAL_RESPONSE_MESSAGE,
+    is_silent_content,
 )
 
 if TYPE_CHECKING:
@@ -1534,6 +1535,21 @@ class AgentLoop:
         if (mt := self.tools.get("message")) and isinstance(mt, MessageTool) and mt._sent_in_turn:
             if not had_injections or stop_reason == "empty_final_response":
                 return None
+
+        # Local fix (not in hk): [SILENT] → msg_type="silent", never send the
+        # marker text itself. Restore after hk merges (nanobot/.claude/CLAUDE.md §9).
+        if is_silent_content(final_content):
+            logger.info(
+                "Silent response for {}:{} (agent chose not to respond)",
+                msg.channel, msg.sender_id,
+            )
+            return OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content="",
+                metadata=dict(msg.metadata or {}),
+                msg_type="silent",
+            )
 
         preview = final_content[:120] + "..." if len(final_content) > 120 else final_content
         logger.info("Response to {}:{}: {}", msg.channel, msg.sender_id, preview)

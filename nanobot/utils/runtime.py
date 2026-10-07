@@ -72,6 +72,21 @@ def is_blank_text(content: str | None) -> bool:
     return content is None or not content.strip()
 
 
+# Local fix (not in hk): a turn whose entire final output is a silence marker
+# must be converted to msg_type="silent" instead of sending the marker text.
+# Restore after every hk merge — see nanobot/.claude/CLAUDE.md §9.
+SILENT_MARKERS = frozenset({"[silent]", "[no_response]", "[skip]", "silent"})
+
+
+def is_silent_content(content: str | None) -> bool:
+    """True when the entire output is just a silence marker.
+
+    Exact (stripped, case-insensitive) match only — substring matching would
+    swallow legitimate messages that merely mention the marker.
+    """
+    return content is not None and content.strip().lower() in SILENT_MARKERS
+
+
 def build_finalization_retry_message() -> dict[str, str]:
     """A short no-tools-allowed prompt for final answer recovery."""
     return {"role": "user", "content": FINALIZATION_RETRY_PROMPT}
