@@ -46,6 +46,29 @@ if TYPE_CHECKING:
     from nanobot.triggers.local_store import LocalTriggerStore
 
 
+# [LOCAL] Silent-marker suppression. Models signal "say nothing" by emitting a
+# marker such as ``[SILENT]``; the harness must never deliver the marker as
+# visible text. Upstream has no such handling — keep this block when merging
+# upstream changes, and keep it in sync with ``nanobot/.claude/CLAUDE.md``.
+_SILENT_MARKERS = frozenset({"silent", "no_response", "no_reply", "skip"})
+
+
+def _is_silent_marker(content: str) -> bool:
+    """Return True if *content* consists solely of a stay-silent marker.
+
+    Tolerant matcher: trims whitespace, strips markdown emphasis wrappers and
+    one pair of square brackets, and ignores case — so ``SILENT``,
+    ``[Silent]``, ``**[SILENT]**`` are all caught. Text that merely contains
+    a marker among other content is NOT suppressed.
+    """
+    text = content.strip()
+    while len(text) >= 2 and text[0] in "*_`~" and text[-1] == text[0]:
+        text = text[1:-1].strip()
+    if text.startswith("[") and text.endswith("]"):
+        text = text[1:-1].strip()
+    return text.casefold() in _SILENT_MARKERS
+
+
 def _default_webui_dist() -> Path | None:
     """Return the absolute path to the bundled webui dist directory if it exists."""
     try:
@@ -642,6 +665,15 @@ class ChannelManager:
         normalized = " ".join(content.split())
         return hashlib.sha1(normalized.encode("utf-8")).hexdigest() if normalized else ""
 
+    def _should_drop_silent(self, msg: OutboundMessage) -> bool:
+        """[LOCAL] Return True when *msg* is a stay-silent marker that must
+        not be delivered to any channel. See ``_is_silent_marker``."""
+        if outbound_event_from_message(msg) is not None:
+            return False
+        if msg.msg_type == "silent":
+            return True
+        return _is_silent_marker(msg.content or "")
+
     def _should_suppress_outbound(self, msg: OutboundMessage) -> bool:
         metadata = msg.metadata or {}
         if isinstance(outbound_event_from_message(msg), ProgressEvent):
@@ -726,6 +758,17 @@ class ChannelManager:
                     msg, extra_pending = self._coalesce_stream_deltas(msg)
                     pending.extend(extra_pending)
                     event = outbound_event_from_message(msg)
+
+                # [LOCAL] Drop stay-silent markers before any delivery.
+                if self._should_drop_silent(msg):
+                    logger.info(
+                        "Suppressing silent-marker message to {}:{}",
+                        msg.channel,
+                        msg.chat_id,
+                    )
+                    if msg.delivery_future is not None and not msg.delivery_future.done():
+                        msg.delivery_future.set_result(None)
+                    continue
 
                 channel = self.channels.get(msg.channel)
                 if channel:

@@ -105,7 +105,7 @@
 - `run()` 的 `finally` 块必须调用 `await self.bus.complete_inbound_turn(msg)`，否则 buffer 永远不清空，所有后续消息被积压
 - `__init__` 新增 `history_max_age_hours: float = 24.0` 参数，两处 `get_history()` 调用均需透传 `max_age_hours=self.history_max_age_hours`
 - `/new` 和 `/help` 命令匹配需用 `cmd.split("@")[0]`，兼容 Telegram 群组的 `/cmd@botname` 格式
-- `[SILENT]` 输出需转换为 `msg_type="silent"` 的 OutboundMessage，不能直接发送文本
+- `[SILENT]` 输出需转换为 `msg_type="silent"` 的 OutboundMessage，不能直接发送文本；拦截实现位于 `nanobot/channels/manager.py`（模块级 `_is_silent_marker()` + `ChannelManager._should_drop_silent()`，在 `_dispatch_outbound()` 发送前丢弃），matcher 须宽容：trim、忽略大小写、接受裸 `SILENT` 及 markdown 强调包裹等变体，且只在整条消息仅为标记时拦截；测试在 `tests/channels/test_channel_manager_silent_marker.py`
 - `_save_turn()` 末尾需推进 `last_consolidated`：`if len(session.messages) - session.last_consolidated > self.memory_window: session.last_consolidated = len(session.messages) - self.memory_window`
 - `_run_agent_loop()` 中 LLM 无 tool call 时，final response 必须用 `add_assistant_message()` 写入 messages，否则不会存入 session
 
