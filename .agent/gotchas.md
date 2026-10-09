@@ -38,3 +38,13 @@ Built-in skills live in `nanobot/skills/` (markdown + YAML frontmatter format). 
 ## Atomic Session Writes
 
 `agent/memory.py` writes `history.jsonl` atomically (temp file + fsync + rename + directory fsync). This guarantees durability across crashes. Do not replace this with a plain `open(..., "w")` write.
+
+## [LOCAL] Silent-Marker Suppression (not upstream)
+
+Models signal "say nothing" by emitting a marker (`[SILENT]`, `[NO_RESPONSE]`, `[NO_REPLY]`, `[SKIP]`) as the entire message. Upstream HKUDS/nanobot has no such handling — this is a local customization that has been lost to upstream merges twice. Keep all three layers when merging:
+
+1. **Matcher**: `nanobot/utils/silent_markers.py` (`is_silent_marker`, `is_silent_marker_prefix`). Tolerant: trims whitespace, strips one pair of markdown emphasis/brackets, ignores case; only whole-message markers match.
+2. **Source suppression**: `agent/turn_delivery.py` holds back stream deltas while the accumulated text is still a possible marker prefix (pure-marker turns publish nothing); `agent/loop.py` `_assemble_outbound` returns `None` for marker finals.
+3. **Safety net**: `channels/manager.py` `_should_drop_silent` drops marker-content messages in `_dispatch_outbound`, including stream-event-wrapped ones (deltas/streamed finals leak past older versions of this check — do not re-add the "any event → keep" early return).
+
+Regression tests: `tests/channels/test_channel_manager_silent_marker.py`, `tests/agent/test_turn_delivery_silent_holdback.py`.

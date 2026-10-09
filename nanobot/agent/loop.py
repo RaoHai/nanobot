@@ -47,6 +47,7 @@ from nanobot.bus.events import InboundMessage, OutboundMessage
 from nanobot.bus.outbound_events import StreamedResponseEvent
 from nanobot.bus.queue import MessageBus
 from nanobot.bus.runtime_events import RuntimeEventBus
+from nanobot.utils.silent_markers import is_silent_marker
 from nanobot.command import CommandContext, CommandRouter, register_builtin_commands
 from nanobot.config.schema import AgentDefaults, ModelPresetConfig
 from nanobot.providers.base import LLMProvider, ProviderConversationState
@@ -1562,6 +1563,16 @@ class AgentLoop:
         turn_latency_ms: int | None = None,
     ) -> OutboundMessage | None:
         """Assemble the final outbound message from turn results."""
+        # [LOCAL] Stay-silent marker: the model asked to say nothing, so no
+        # outbound message exists at all (stream deltas were held back in
+        # turn delivery; the manager drops any stragglers).
+        if is_silent_marker(final_content):
+            logger.info(
+                "Suppressing silent-marker response to {}:{}",
+                msg.channel,
+                msg.sender_id,
+            )
+            return None
         # MessageTool suppression
         if (mt := self.tools.get("message")) and isinstance(mt, MessageTool) and mt._sent_in_turn:
             if not had_injections or stop_reason == "empty_final_response":

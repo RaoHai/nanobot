@@ -49,24 +49,11 @@ if TYPE_CHECKING:
 # [LOCAL] Silent-marker suppression. Models signal "say nothing" by emitting a
 # marker such as ``[SILENT]``; the harness must never deliver the marker as
 # visible text. Upstream has no such handling — keep this block when merging
-# upstream changes, and keep it in sync with ``nanobot/.claude/CLAUDE.md``.
-_SILENT_MARKERS = frozenset({"silent", "no_response", "no_reply", "skip"})
-
-
-def _is_silent_marker(content: str) -> bool:
-    """Return True if *content* consists solely of a stay-silent marker.
-
-    Tolerant matcher: trims whitespace, strips markdown emphasis wrappers and
-    one pair of square brackets, and ignores case — so ``SILENT``,
-    ``[Silent]``, ``**[SILENT]**`` are all caught. Text that merely contains
-    a marker among other content is NOT suppressed.
-    """
-    text = content.strip()
-    while len(text) >= 2 and text[0] in "*_`~" and text[-1] == text[0]:
-        text = text[1:-1].strip()
-    if text.startswith("[") and text.endswith("]"):
-        text = text[1:-1].strip()
-    return text.casefold() in _SILENT_MARKERS
+# upstream changes, and keep it in sync with ``.agent/gotchas.md``.
+# The matcher itself lives in ``nanobot.utils.silent_markers`` so the agent
+# loop and turn delivery can share it; ``_is_silent_marker`` stays importable
+# here for backwards compatibility.
+from nanobot.utils.silent_markers import is_silent_marker as _is_silent_marker
 
 
 def _default_webui_dist() -> Path | None:
@@ -668,11 +655,16 @@ class ChannelManager:
     def _should_drop_silent(self, msg: OutboundMessage) -> bool:
         """[LOCAL] Return True when *msg* is a stay-silent marker that must
         not be delivered to any channel. See ``_is_silent_marker``."""
-        if outbound_event_from_message(msg) is not None:
-            return False
         if msg.msg_type == "silent":
             return True
-        return _is_silent_marker(msg.content or "")
+        if not _is_silent_marker(msg.content or ""):
+            return False
+        # Progress/reasoning events are transient UI affordances, not the
+        # final answer; leave their (unlikely) marker-shaped content alone.
+        # Stream deltas/ends and streamed final responses carry user-visible
+        # text, so a marker there must be dropped just like a plain message.
+        event = outbound_event_from_message(msg)
+        return not isinstance(event, ProgressEvent)
 
     def _should_suppress_outbound(self, msg: OutboundMessage) -> bool:
         metadata = msg.metadata or {}

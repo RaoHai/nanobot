@@ -9,6 +9,9 @@ import pytest
 from nanobot.bus.events import OutboundMessage
 from nanobot.bus.outbound_events import (
     ProgressEvent,
+    StreamDeltaEvent,
+    StreamEndEvent,
+    StreamedResponseEvent,
     outbound_message_for_event,
 )
 from nanobot.bus.queue import MessageBus
@@ -96,6 +99,28 @@ class TestShouldDropSilent:
             channel="mock", chat_id="chat1", event=ProgressEvent(content="[SILENT]"),
         )
         assert manager._should_drop_silent(msg) is False
+
+    def test_streamed_response_marker_dropped(self, manager):
+        msg = outbound_message_for_event(
+            channel="mock", chat_id="chat1", event=StreamedResponseEvent(),
+            content="[SILENT]",
+        )
+        assert manager._should_drop_silent(msg) is True
+
+    def test_stream_delta_marker_dropped(self, manager):
+        msg = outbound_message_for_event(
+            channel="mock", chat_id="chat1",
+            event=StreamDeltaEvent(content="[SILENT]", stream_id="s1"),
+        )
+        assert manager._should_drop_silent(msg) is True
+
+    def test_stream_end_marker_dropped(self, manager):
+        msg = outbound_message_for_event(
+            channel="mock", chat_id="chat1",
+            event=StreamEndEvent(stream_id="s1"),
+            content="[SILENT]",
+        )
+        assert manager._should_drop_silent(msg) is True
 
     def test_empty_content_kept(self, manager):
         assert manager._should_drop_silent(self._msg("")) is False
